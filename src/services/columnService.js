@@ -56,8 +56,17 @@ export const deleteColumn = async (id) => {
 /** Cập nhật thứ tự cột hàng loạt */
 export const reorderColumns = async (updates) => {
   if (!updates?.length) return true
-  const { error } = await supabase.from('custom_columns').upsert(updates)
-  if (error) throw error
+  
+  // Sử dụng loop update để tránh lỗi 403 Forbidden của upsert (thường do thiếu quyền INSERT)
+  // và đảm bảo RLS hoạt động chính xác với từng dòng.
+  for (const item of updates) {
+    const { error } = await supabase
+      .from('custom_columns')
+      .update({ column_order: item.column_order })
+      .eq('id', item.id)
+    if (error) throw error
+  }
+  
   return true
 }
 
