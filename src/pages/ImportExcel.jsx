@@ -33,6 +33,7 @@ const SYSTEM_COLUMN_PRESETS = [
 const CLASS_COLUMN_ALIASES = ['lớp', 'lop', 'lớp học', 'lop hoc', 'class', 'class_name', 'malop', 'mã lớp', 'ma lop', 'lớp(mã)']
 
 const SYSTEM_FIELDS = ['student_code', 'full_name', 'date_of_birth', 'warning_level', 'warning_reason', 'warning_date', 'warning_note']
+const IGNORE_COLUMN_ALIASES = ['stt', 'số thứ tự', 'so thu tu', 'no', 'index', 'id']
 
 /**
  * Thử parse ngày tháng từ Excel sang format YYYY-MM-DD
@@ -208,6 +209,12 @@ export default function ImportExcel() {
     const m = {}
     headers.forEach((h) => {
       const normalized = String(h).trim().toLowerCase()
+
+      // 0) Bỏ qua các cột STT, ID
+      if (IGNORE_COLUMN_ALIASES.includes(normalized)) {
+        m[h] = { type: 'ignore' }
+        return
+      }
 
       // 1) Cột Lớp
       if (CLASS_COLUMN_ALIASES.includes(normalized)) {
@@ -520,7 +527,7 @@ export default function ImportExcel() {
           inserted: insertedCount,
           updated: updatedCount,
           new_classes: newClassNames.size,
-          new_columns: newCustomHeaders.length,
+          new_columns: customMappingHeaders.length,
         },
       })
 
@@ -530,11 +537,14 @@ export default function ImportExcel() {
         updated: updatedCount,
         errors: validated.length - insertedCount - updatedCount,
         newClasses: newClassNames.size,
-        newColumns: newCustomHeaders.length,
+        newColumns: customMappingHeaders.length,
       })
       setConfirmImport(false)
-      showSuccess(`Import xong: ${insertedCount} mới, ${updatedCount} cập nhật`)
       setStep(5)
+      // Hiện toast sau khi chuyển step để chắc chắn render
+      setTimeout(() => {
+        showSuccess(`Import hoàn tất: ${insertedCount} mới, ${updatedCount} cập nhật`)
+      }, 100)
     } catch (e) {
       showError(e.message || 'Import thất bại')
     } finally {
