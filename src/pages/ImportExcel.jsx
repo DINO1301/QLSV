@@ -34,6 +34,38 @@ const CLASS_COLUMN_ALIASES = ['lớp', 'lop', 'lớp học', 'lop hoc', 'class',
 
 const SYSTEM_FIELDS = ['student_code', 'full_name', 'date_of_birth', 'warning_level', 'warning_reason', 'warning_date', 'warning_note']
 
+/**
+ * Thử parse ngày tháng từ Excel sang format YYYY-MM-DD
+ */
+function parseExcelDate(val) {
+  if (!val) return null
+  const s = String(val).trim()
+  if (!s) return null
+
+  // 1. Dạng YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+
+  // 2. Dạng DD/MM/YYYY
+  const dm = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+  if (dm) {
+    const d = dm[1].padStart(2, '0')
+    const m = dm[2].padStart(2, '0')
+    const y = dm[3]
+    return `${y}-${m}-${d}`
+  }
+
+  // 3. Dạng YYYY/MM/DD
+  const ym = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/)
+  if (ym) {
+    const y = ym[1]
+    const m = ym[2].padStart(2, '0')
+    const d = ym[3].padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+
+  return s // Trả về nguyên bản nếu không khớp, Supabase có thể báo lỗi sau
+}
+
 export default function ImportExcel() {
   const navigate = useNavigate()
   const { profile, isAdmin } = useAuth()
@@ -220,7 +252,7 @@ export default function ImportExcel() {
 
     const mappedCustom = Object.entries(mapping)
       .filter(([_, v]) => v.type === 'custom')
-      .map(([excel, v]) => ({ excel, columnId: v.key, column: v.column }))
+      .map(([excel, v]) => ({ excel, column: v.column }))
 
     const mappedSystem = Object.entries(mapping)
       .filter(([_, v]) => v.type === 'system')
@@ -263,7 +295,12 @@ export default function ImportExcel() {
       mappedSystem.forEach(({ excel, key }) => {
         const val = row[excel]
         if (val !== undefined && val !== null && String(val).trim() !== '') {
-          payload[key] = val
+          // Format date for system fields
+          if (key === 'date_of_birth' || key === 'warning_date') {
+            payload[key] = parseExcelDate(val)
+          } else {
+            payload[key] = val
+          }
         }
       })
 
@@ -285,8 +322,8 @@ export default function ImportExcel() {
         payload.warning_level = 0
       }
 
-      // custom values (cột đã có)
-      mappedCustom.forEach(({ excel, columnId, column }) => {
+      // custom values (cột đã có - lưu theo header để resolve sau)
+      mappedCustom.forEach(({ excel, column }) => {
         const v = row[excel]
         if (v === undefined || v === null || String(v).trim() === '') return
         let value = v
@@ -303,7 +340,7 @@ export default function ImportExcel() {
           errors.push(`Cột "${excel}": ${err.message}`)
           value = null
         }
-        payload.custom_values[columnId] = value
+        payload.custom_values[excel] = value
       })
 
       // new custom values (cột sẽ tạo mới)
@@ -359,10 +396,15 @@ export default function ImportExcel() {
       selectedClasses.forEach((id) => usedClassIds.add(id))
       const usedClassIdArr = Array.from(usedClassIds)
 
-      // 3) Tạo các cột tùy chỉnh mới: chỉ tạo nếu lớp chưa có cột cùng tên
-      const newCustomHeaders = Object.entries(mapping)
-        .filter(([_, v]) => v.type === 'new_custom')
-        .map(([h]) => h)
+      // 3) Tạo/Tìm các cột tùy chỉnh cho từng lớp
+      // Gộp cả cột mới và cột đã map (để đảm bảo đồng bộ ID theo tên lớp)
+      const customMappingHeaders = Object.entries(mapping)
+        .filter(([_, v]) => v.type === 'new_custom' || v.type === 'custom')
+        .map(([h, v]) => ({
+          header: h,
+          targetName: v.type === 'custom' ? v.column.column_name : h,
+          dataType: v.type === 'custom' ? v.column.data_type : DATA_TYPES.TEXT
+        }))
 
       const colsByClass = {} // classId -> Map(tên cột lower -> column)
       for (const cid of usedClassIdArr) {
@@ -371,17 +413,21 @@ export default function ImportExcel() {
       }
 
       const newColumnIdMap = {} // { excelHeader: { classId: columnId } }
-      for (const header of newCustomHeaders) {
-        const key = String(header).trim().toLowerCase()
+      for (const { header, targetName, dataType } of customMappingHeaders) {
+        const key = String(targetName).trim().toLowerCase()
         newColumnIdMap[header] = {}
         for (const cid of usedClassIdArr) {
           const found = colsByClass[cid]?.get(key)
-          if (found) { newColumnIdMap[header][cid] = found.id; continue }
+          if (found) { 
+            newColumnIdMap[header][cid] = found.id
+            continue 
+          }
+          // Nếu không tìm thấy cột cùng tên trong lớp này, tự động tạo mới
           try {
             const col = await createColumn({
               class_id: cid,
-              column_name: header,
-              data_type: DATA_TYPES.TEXT,
+              column_name: targetName,
+              data_type: dataType,
               column_order: 999,
             })
             newColumnIdMap[header][cid] = col.id
@@ -454,13 +500,8 @@ export default function ImportExcel() {
 
         const [classId] = key.split('|')
 
-        // Custom values (cột đã có)
-        Object.entries(meta.custom_values).forEach(([colId, val]) => {
-          if (val === null || val === undefined) return
-          cvBulk.push({ student_id: studentId, column_id: colId, value: val })
-        })
-        // Custom values (cột mới tạo)
-        Object.entries(meta.new_custom_values).forEach(([header, val]) => {
+        // Custom values (cả cột đã map và cột mới)
+        Object.entries({ ...meta.custom_values, ...meta.new_custom_values }).forEach(([header, val]) => {
           const colId = newColumnIdMap[header]?.[classId]
           if (colId && val !== null && val !== undefined) {
             cvBulk.push({ student_id: studentId, column_id: colId, value: val })
@@ -520,6 +561,18 @@ export default function ImportExcel() {
     )
   }
 
+  const selectAllClasses = () => {
+    const allIds = classes
+      .filter(c => isAdmin || classPerms[c.id])
+      .map(c => c.id)
+    
+    if (selectedClasses.length === allIds.length) {
+      setSelectedClasses([])
+    } else {
+      setSelectedClasses(allIds)
+    }
+  }
+
   const canProceedStep1 = useMemo(() => {
     // Phải chọn ít nhất 1 lớp HOẶC bật tự tạo lớp mới
     if (autoCreateClass) return true
@@ -564,6 +617,18 @@ export default function ImportExcel() {
             </p>
 
             {/* Danh sách lớp dạng checkbox */}
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-slate-700">Danh sách lớp học:</span>
+              <button
+                type="button"
+                onClick={selectAllClasses}
+                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+              >
+                {selectedClasses.length > 0 && selectedClasses.length === classes.filter(c => isAdmin || classPerms[c.id]).length
+                  ? ' bỏ chọn tất cả'
+                  : '✔️ Chọn tất cả lớp'}
+              </button>
+            </div>
             <div className="border border-slate-200 rounded-lg max-h-72 overflow-y-auto">
               {classes.length === 0 ? (
                 <p className="p-6 text-center text-slate-400 text-sm">Chưa có lớp học nào.</p>
