@@ -58,8 +58,15 @@ export const deleteClass = async (id) => {
 /** Xóa nhiều lớp */
 export const deleteClassesBulk = async (ids) => {
   if (!ids?.length) return true
-  const { error } = await supabase.from('classes').delete().in('id', ids)
-  if (error) throw error
+  
+  // Chia lô 50 để tránh lỗi URL quá dài (Max URL length)
+  const CHUNK = 50
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunkIds = ids.slice(i, i + CHUNK)
+    const { error } = await supabase.from('classes').delete().in('id', chunkIds)
+    if (error) throw error
+  }
+  
   return true
 }
 
