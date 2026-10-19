@@ -59,12 +59,17 @@ export const deleteClass = async (id) => {
 export const deleteClassesBulk = async (ids) => {
   if (!ids?.length) return true
   
-  // Chia lô 50 để tránh lỗi URL quá dài (Max URL length)
-  const CHUNK = 50
+  // Chia lô nhỏ (10 lớp) và thêm delay để DB xử lý cascade delete (sinh viên, log...) kịp
+  const CHUNK = 10
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunkIds = ids.slice(i, i + CHUNK)
     const { error } = await supabase.from('classes').delete().in('id', chunkIds)
     if (error) throw error
+    
+    // Delay 200ms giữa các lô
+    if (i + CHUNK < ids.length) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
   }
   
   return true
