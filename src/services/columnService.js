@@ -77,13 +77,27 @@ export const upsertCustomValue = async (studentId, columnId, value) => {
   return data
 }
 
-/** Bulk upsert custom values */
+/** Bulk upsert custom values (tự chia lô + loại trùng cặp student_id/column_id) */
 export const upsertCustomValuesBulk = async (rows) => {
   if (!rows?.length) return []
-  const { data, error } = await supabase
-    .from('custom_values')
-    .upsert(rows, { onConflict: 'student_id, column_id' })
-    .select()
-  if (error) throw error
-  return data || []
+
+  // Loại trùng: Postgres báo lỗi nếu 1 lệnh upsert tác động cùng 1 dòng 2 lần
+  const dedup = new Map()
+  rows.forEach((r) => {
+    if (!r?.student_id || !r?.column_id) return
+    dedup.set(`${r.student_id}|${r.column_id}`, r)
+  })
+  const list = Array.from(dedup.values())
+
+  const CHUNK = 500
+  const out = []
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const { data, error } = await supabase
+      .from('custom_values')
+      .upsert(list.slice(i, i + CHUNK), { onConflict: 'student_id, column_id' })
+      .select()
+    if (error) throw error
+    out.push(...(data || []))
+  }
+  return out
 }

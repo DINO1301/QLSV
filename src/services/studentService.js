@@ -1,22 +1,80 @@
 import { supabase } from './supabaseClient'
 
+/**
+ * Supabase/PostgREST mặc định chỉ trả tối đa 1000 dòng (max rows).
+ * Hàm này tự động phân trang để lấy HẾT dữ liệu.
+ * `buildQuery` phải là hàm tạo query mới mỗi lần gọi (PostgREST builder chỉ dùng 1 lần).
+ */
+const PAGE_SIZE = 1000
+export const fetchAllRows = async (buildQuery) => {
+  const all = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    const rows = data || []
+    all.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+  return all
+}
+
 /** Lấy tất cả sinh viên của 1 lớp + custom values pivot sẵn */
 export const getStudentsByClass = async (classId) => {
   if (!classId) return []
-  const { data, error } = await supabase
-    .from('students')
-    .select(`
-      *,
-      custom_values(
-        id,
-        column_id,
-        value
-      )
-    `)
+
+  // 1) Lấy hết sinh viên của lớp (phân trang)
+  const students = await fetchAllRows(() =>
+    supabase.from('students').select('*').eq('class_id', classId).order('student_code', { ascending: true })
+  )
+  if (!students.length) return students
+
+  // 2) Lấy hết custom values theo cột của lớp (URL ngắn, không phụ thuộc số sinh viên)
+  const { data: cols, error: colErr } = await supabase
+    .from('custom_columns')
+    .select('id')
     .eq('class_id', classId)
-    .order('student_code', { ascending: true })
-  if (error) throw error
-  return data || []
+  if (colErr) throw colErr
+  const colIds = (cols || []).map((c) => c.id)
+
+  let values = []
+  if (colIds.length) {
+    values = await fetchAllRows(() =>
+      supabase.from('custom_values').select('id, student_id, column_id, value').in('column_id', colIds)
+    )
+  }
+
+  // 3) Gắn custom_values vào từng sinh viên
+  const map = new Map()
+  values.forEach((v) => {
+    if (!map.has(v.student_id)) map.set(v.student_id, [])
+    map.get(v.student_id).push({ id: v.id, column_id: v.column_id, value: v.value })
+  })
+  return students.map((s) => ({ ...s, custom_values: map.get(s.id) || [] }))
+}
+
+/** Lấy toàn bộ sinh viên (đầy đủ trường) của nhiều lớp — dùng cho Import Excel */
+export const getStudentsBasicByClasses = async (classIds) => {
+  const ids = (classIds || []).filter(Boolean)
+  if (!ids.length) return []
+  return fetchAllRows(() => supabase.from('students').select('*').in('class_id', ids))
+}
+
+/** Bulk upsert sinh viên theo khóa (class_id, student_code) — dùng cho Import Excel */
+export const upsertStudentsBulk = async (rows) => {
+  if (!rows?.length) return []
+  const CHUNK = 500
+  const out = []
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const { data, error } = await supabase
+      .from('students')
+      .upsert(rows.slice(i, i + CHUNK), { onConflict: 'class_id,student_code' })
+      .select()
+    if (error) throw error
+    out.push(...(data || []))
+  }
+  return out
 }
 
 /** Thêm 1 sinh viên */

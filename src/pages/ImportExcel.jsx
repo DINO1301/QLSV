@@ -10,7 +10,7 @@ import { PageLoader, Badge, Spinner } from '../components/UI/Skeleton'
 import { getAllClasses, createClass } from '../services/classService'
 import { getColumnsByClass, createColumn, upsertCustomValuesBulk } from '../services/columnService'
 import {
-  createStudentsBulk, getStudentByCodeInClass, updateStudent,
+  getStudentsBasicByClasses, upsertStudentsBulk,
 } from '../services/studentService'
 import { parseExcelFile } from '../services/excelService'
 import { insertLog } from '../services/logService'
@@ -350,26 +350,33 @@ export default function ImportExcel() {
         } catch (_) { /* lớp có thể đã tạo bởi process khác */ }
       }
 
-      // 2) Tạo các custom column mới cho từng lớp
-      // Lấy danh sách các lớp có sinh viên import vào
+      // 2) Các lớp liên quan (lớp của dữ liệu import + lớp đã chọn)
       const usedClassIds = new Set()
       valid.forEach((v) => {
         const name = String(v.__class_name__ || '').trim().toLowerCase()
         if (classIdMap[name]) usedClassIds.add(classIdMap[name].id)
       })
-      // Gộp với các lớp đã chọn (để đồng bộ cột cho các lớp chọn)
       selectedClasses.forEach((id) => usedClassIds.add(id))
+      const usedClassIdArr = Array.from(usedClassIds)
 
-      // Các cột mới cần tạo
+      // 3) Tạo các cột tùy chỉnh mới: chỉ tạo nếu lớp chưa có cột cùng tên
       const newCustomHeaders = Object.entries(mapping)
         .filter(([_, v]) => v.type === 'new_custom')
         .map(([h]) => h)
 
-      // Map cột mới: { excelHeader: { classId: columnId } }
-      const newColumnIdMap = {}
+      const colsByClass = {} // classId -> Map(tên cột lower -> column)
+      for (const cid of usedClassIdArr) {
+        const cols = await getColumnsByClass(cid)
+        colsByClass[cid] = new Map(cols.map((c) => [c.column_name.trim().toLowerCase(), c]))
+      }
+
+      const newColumnIdMap = {} // { excelHeader: { classId: columnId } }
       for (const header of newCustomHeaders) {
+        const key = String(header).trim().toLowerCase()
         newColumnIdMap[header] = {}
-        for (const cid of usedClassIds) {
+        for (const cid of usedClassIdArr) {
+          const found = colsByClass[cid]?.get(key)
+          if (found) { newColumnIdMap[header][cid] = found.id; continue }
           try {
             const col = await createColumn({
               class_id: cid,
@@ -378,56 +385,82 @@ export default function ImportExcel() {
               column_order: 999,
             })
             newColumnIdMap[header][cid] = col.id
+            colsByClass[cid]?.set(key, col)
           } catch (_) { /* có thể cột đã tồn tại */ }
         }
       }
 
-      // 3) Upsert sinh viên theo (class_id, student_code)
-      let insertedCount = 0
-      let updatedCount = 0
-      const cvBulk = []
+      // 4) Lấy 1 lần toàn bộ sinh viên hiện có của các lớp liên quan
+      const existingList = await getStudentsBasicByClasses(usedClassIdArr)
+      const existingMap = new Map()
+      existingList.forEach((s) => {
+        existingMap.set(`${s.class_id}|${String(s.student_code).trim()}`, s)
+      })
 
+      // 5) Gộp dữ liệu: giữ nguyên giá trị cũ, chỉ ghi đè bằng ô có giá trị mới
+      const payloadMap = new Map() // key -> payload (loại trùng, dòng sau thắng)
+      const rowMeta = new Map()    // key -> { isNew, custom_values, new_custom_values }
       for (const v of valid) {
         const name = String(v.__class_name__ || '').trim().toLowerCase()
         const classObj = classIdMap[name]
         if (!classObj) continue
         const classId = classObj.id
         const code = String(v.student_code).trim()
+        const key = `${classId}|${code}`
 
-        // Build payload student
-        const studentPayload = { class_id: classId }
+        const existing = existingMap.get(key)
+        const payload = existing
+          ? { ...existing }
+          : { class_id: classId, student_code: code }
+        // Không gửi lại các trường do DB tự sinh
+        delete payload.id
+        delete payload.created_at
+        delete payload.updated_at
+
         SYSTEM_FIELDS.forEach((k) => {
           if (v[k] !== undefined && v[k] !== null && String(v[k]).trim() !== '') {
-            studentPayload[k] = (k === 'student_code' || k === 'full_name') ? String(v[k]).trim() : v[k]
+            payload[k] = (k === 'student_code' || k === 'full_name') ? String(v[k]).trim() : v[k]
           }
         })
+        payload.class_id = classId
+        payload.student_code = code
 
-        // Tìm sinh viên theo mã trong lớp
-        const existing = await getStudentByCodeInClass(classId, code)
-        let studentId
-        if (existing) {
-          // Cập nhật (merge: chỉ ghi đè trường có giá trị)
-          const updatePayload = {}
-          Object.entries(studentPayload).forEach(([k, val]) => {
-            if (k !== 'class_id' && k !== 'student_code') updatePayload[k] = val
-          })
-          await updateStudent(existing.id, updatePayload)
-          studentId = existing.id
-          updatedCount++
-        } else {
-          // Tạo mới
-          const created = await createStudentsBulk([studentPayload])
-          studentId = created[0]?.id
-          insertedCount++
-        }
+        payloadMap.set(key, payload)
+        rowMeta.set(key, {
+          isNew: !existing,
+          custom_values: v.custom_values || {},
+          new_custom_values: v.new_custom_values || {},
+        })
+      }
+
+      // 6) Bulk upsert sinh viên theo (class_id, student_code)
+      const payloadList = Array.from(payloadMap.values())
+      const upserted = await upsertStudentsBulk(payloadList)
+
+      const idMap = new Map()
+      upserted.forEach((s) => {
+        idMap.set(`${s.class_id}|${String(s.student_code).trim()}`, s.id)
+      })
+
+      let insertedCount = 0
+      let updatedCount = 0
+      const cvBulk = []
+
+      for (const [key, meta] of rowMeta) {
+        const studentId = idMap.get(key)
+        if (!studentId) continue
+        if (meta.isNew) insertedCount++
+        else updatedCount++
+
+        const [classId] = key.split('|')
 
         // Custom values (cột đã có)
-        Object.entries(v.custom_values || {}).forEach(([colId, val]) => {
+        Object.entries(meta.custom_values).forEach(([colId, val]) => {
           if (val === null || val === undefined) return
           cvBulk.push({ student_id: studentId, column_id: colId, value: val })
         })
         // Custom values (cột mới tạo)
-        Object.entries(v.new_custom_values || {}).forEach(([header, val]) => {
+        Object.entries(meta.new_custom_values).forEach(([header, val]) => {
           const colId = newColumnIdMap[header]?.[classId]
           if (colId && val !== null && val !== undefined) {
             cvBulk.push({ student_id: studentId, column_id: colId, value: val })
@@ -435,7 +468,7 @@ export default function ImportExcel() {
         })
       }
 
-      // 4) Bulk upsert custom values
+      // 7) Bulk upsert custom values
       if (cvBulk.length) await upsertCustomValuesBulk(cvBulk)
 
       // Log

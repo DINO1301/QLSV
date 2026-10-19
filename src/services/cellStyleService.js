@@ -6,18 +6,11 @@ import { supabase } from './supabaseClient'
  */
 export const getCellStylesByClass = async (classId) => {
   if (!classId) return {}
-  const { data: students, error: e1 } = await supabase
-    .from('students')
-    .select('id')
-    .eq('class_id', classId)
-  if (e1) throw e1
-  const ids = (students || []).map((s) => s.id)
-  if (!ids.length) return {}
-
+  // Lọc trực tiếp theo lớp qua join students!inner (tránh .in() với hàng nghìn UUID)
   const { data, error } = await supabase
     .from('cell_styles')
-    .select('student_id, column_key, color')
-    .in('student_id', ids)
+    .select('student_id, column_key, color, students!inner(class_id)')
+    .eq('students.class_id', classId)
   if (error) throw error
 
   const map = {}
