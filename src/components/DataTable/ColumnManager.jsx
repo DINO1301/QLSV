@@ -32,6 +32,7 @@ export default function ColumnManager({
   })
   const [formErr, setFormErr] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [reordering, setReordering] = useState(false)
   const [confirmDel, setConfirmDel] = useState(null)
 
   // Reset form khi mở modal tạo mới
@@ -112,16 +113,32 @@ export default function ColumnManager({
   }
 
   const moveOrder = async (index, dir) => {
+    if (reordering) return
     const newArr = [...columns]
     const target = index + dir
     if (target < 0 || target >= newArr.length) return
-    ;[newArr[index], newArr[target]] = [newArr[target], newArr[index]]
-    const updates = newArr.map((c, idx) => ({ ...c, column_order: idx }))
+    
+    setReordering(true)
+    // Hoán đổi vị trí
+    const temp = newArr[index]
+    newArr[index] = newArr[target]
+    newArr[target] = temp
+
+    // Cập nhật lại column_order cho toàn bộ list để đảm bảo tính liên tục
+    const updates = newArr.map((c, idx) => ({ 
+      id: c.id, 
+      column_order: idx 
+    }))
+
     try {
       await reorderColumns(updates)
-      setColumns(updates)
+      // Cập nhật state với data mới (giữ lại các trường khác của column)
+      const updatedColumns = newArr.map((c, idx) => ({ ...c, column_order: idx }))
+      setColumns(updatedColumns)
     } catch (e) {
       showError(e.message || 'Thay đổi thứ tự thất bại')
+    } finally {
+      setReordering(false)
     }
   }
 
@@ -179,23 +196,27 @@ export default function ColumnManager({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <span className="font-mono text-xs w-6 text-center">{idx + 1}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs w-6 text-center text-slate-400">{idx + 1}</span>
                         {canEdit && (
-                          <>
+                          <div className="flex flex-col gap-0.5">
                             <button
                               onClick={() => moveOrder(idx, -1)}
-                              disabled={idx === 0}
-                              className="w-6 h-6 rounded text-xs border border-slate-200 disabled:opacity-30 hover:bg-slate-100"
-                              title="Lên"
-                            >↑</button>
+                              disabled={idx === 0 || reordering}
+                              className="p-0.5 rounded text-[10px] border border-slate-200 disabled:opacity-30 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-200 transition-colors"
+                              title="Di chuyển lên"
+                            >
+                              ▲
+                            </button>
                             <button
                               onClick={() => moveOrder(idx, +1)}
-                              disabled={idx === columns.length - 1}
-                              className="w-6 h-6 rounded text-xs border border-slate-200 disabled:opacity-30 hover:bg-slate-100"
-                              title="Xuống"
-                            >↓</button>
-                          </>
+                              disabled={idx === columns.length - 1 || reordering}
+                              className="p-0.5 rounded text-[10px] border border-slate-200 disabled:opacity-30 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-200 transition-colors"
+                              title="Di chuyển xuống"
+                            >
+                              ▼
+                            </button>
+                          </div>
                         )}
                       </div>
                     </td>

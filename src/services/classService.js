@@ -55,6 +55,14 @@ export const deleteClass = async (id) => {
   return true
 }
 
+/** Xóa nhiều lớp */
+export const deleteClassesBulk = async (ids) => {
+  if (!ids?.length) return true
+  const { error } = await supabase.from('classes').delete().in('id', ids)
+  if (error) throw error
+  return true
+}
+
 /** Đếm số sinh viên trong 1 lớp */
 export const countStudentsInClass = async (classId) => {
   const { count, error } = await supabase

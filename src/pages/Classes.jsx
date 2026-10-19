@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import {
-  getAllClasses, getClassStudentCounts, createClass, updateClass, deleteClass,
+  getAllClasses, getClassStudentCounts, createClass, updateClass, deleteClass, deleteClassesBulk,
 } from '../services/classService'
 import Card from '../components/UI/Card'
 import Button from '../components/UI/Button'
@@ -31,6 +31,8 @@ export default function Classes() {
 
   // Confirm xóa
   const [confirmDelete, setConfirmDelete] = useState(null) // class record
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -121,6 +123,21 @@ export default function Classes() {
     }
   }
 
+  const onDeleteAll = async () => {
+    setDeletingAll(true)
+    try {
+      const ids = classes.map((c) => c.id)
+      await deleteClassesBulk(ids)
+      showSuccess(`Đã xóa tất cả ${ids.length} lớp học`)
+      setConfirmDeleteAll(false)
+      load()
+    } catch (e) {
+      showError(e.message || 'Xóa tất cả lớp thất bại')
+    } finally {
+      setDeletingAll(false)
+    }
+  }
+
   if (loading) return <PageLoader text="Đang tải danh sách lớp..." />
 
   return (
@@ -140,9 +157,16 @@ export default function Classes() {
               🔄 Tải lại
             </Button>
             {isAdmin && (
-              <Button variant="primary" onClick={openCreate}>
-                ➕ Thêm lớp mới
-              </Button>
+              <>
+                {classes.length > 0 && (
+                  <Button variant="danger" onClick={() => setConfirmDeleteAll(true)}>
+                    🗑️ Xóa tất cả lớp
+                  </Button>
+                )}
+                <Button variant="primary" onClick={openCreate}>
+                  ➕ Thêm lớp mới
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -273,6 +297,17 @@ export default function Classes() {
         confirmText="Xóa lớp này"
         confirmVariant="danger"
         onConfirm={onDelete}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteAll}
+        onClose={() => !deletingAll && setConfirmDeleteAll(false)}
+        title="Xóa TẤT CẢ lớp học"
+        message={`Bạn có chắc muốn xóa TOÀN BỘ ${classes.length} lớp học?\n\nTất cả sinh viên, cột tùy chỉnh, màu ô và dữ liệu liên quan trong hệ thống sẽ bị XÓA VĨNH VIỄN.\n\nHành động này cực kỳ nguy hiểm và không thể hoàn tác.`}
+        confirmText="Tôi chắc chắn, xóa tất cả"
+        confirmVariant="danger"
+        loading={deletingAll}
+        onConfirm={onDeleteAll}
       />
     </div>
   )
