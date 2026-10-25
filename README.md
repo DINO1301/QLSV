@@ -253,4 +253,4 @@ npm run preview   # Xem thử build local
 © 2026 - QLSV Student Management System - Học làm React + Supabase
 
 --
-mk supabase cho csdl : hieu104369@ 
+m csdl : hieu104369@ 
