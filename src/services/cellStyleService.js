@@ -21,6 +21,21 @@ export const getCellStylesByClass = async (classId) => {
   return map
 }
 
+/** Lấy tất cả màu ô trong hệ thống */
+export const getCellStylesAll = async () => {
+  const { data, error } = await supabase
+    .from('cell_styles')
+    .select('student_id, column_key, color')
+  if (error) throw error
+
+  const map = {}
+  ;(data || []).forEach((r) => {
+    if (!map[r.student_id]) map[r.student_id] = {}
+    map[r.student_id][r.column_key] = r.color
+  })
+  return map
+}
+
 /**
  * Lấy màu ô của 1 sinh viên
  * Trả về: { [columnKey]: color }

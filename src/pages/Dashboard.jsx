@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { countAllStudents, getWarningStats } from '../services/studentService'
+import { countAllStudents, getWarningStats, getAllStudentsWithAllCustomColumns } from '../services/studentService'
 import { getAllClasses, getClassStudentCounts } from '../services/classService'
 import { getAllUsers } from '../services/userService'
 import Card from '../components/UI/Card'
@@ -9,6 +9,7 @@ import { PageLoader, Skeleton, Badge } from '../components/UI/Skeleton'
 import Button from '../components/UI/Button'
 import { WARNING_LABELS } from '../utils/constants'
 import { Bar } from 'react-chartjs-2'
+import GlobalStudentTable from '../components/DataTable/GlobalStudentTable'
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend,
@@ -52,6 +53,9 @@ export default function Dashboard() {
   const [warning, setWarning] = useState({ 0: 0, 1: 0, 2: 0, 3: 0 })
   const [userCount, setUserCount] = useState(0)
   const [error, setError] = useState('')
+  const [globalStudents, setGlobalStudents] = useState([])
+  const [globalColumns, setGlobalColumns] = useState([])
+  const [tableLoading, setTableLoading] = useState(false)
 
   const loadAll = async () => {
     setLoading(true)
@@ -70,11 +74,27 @@ export default function Dashboard() {
       setStudentCount(getVal(students, 0))
       setWarning(getVal(wStats, { 0: 0, 1: 0, 2: 0, 3: 0 }))
       setUserCount(getVal(users, []).length)
+      
+      // Load table data separately if needed, or here
+      await loadTableData()
     } catch (e) {
       console.error(e)
       setError(e?.message || 'Lỗi tải dữ liệu')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadTableData = async () => {
+    setTableLoading(true)
+    try {
+      const { students, columns } = await getAllStudentsWithAllCustomColumns()
+      setGlobalStudents(students)
+      setGlobalColumns(columns)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setTableLoading(false)
     }
   }
 
@@ -266,6 +286,28 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+        )}
+      </Card>
+
+      {/* Quản lý sinh viên tổng hợp */}
+      <Card title="Quản lý sinh viên (Tất cả các lớp)">
+        {tableLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center space-y-4">
+            <div className="w-10 h-10 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm text-slate-500">Đang tải danh sách sinh viên tổng hợp...</p>
+          </div>
+        ) : (
+          <GlobalStudentTable
+            students={globalStudents}
+            columns={globalColumns}
+            canEdit={isAdmin} // Chỉ Admin được sửa ở Dashboard global hoặc tùy phân quyền
+            onChanged={(signal) => {
+              if (signal === 'delete' || signal === 'update') {
+                // Có thể reload stats nếu cần
+                loadAll()
+              }
+            }}
+          />
         )}
       </Card>
     </div>

@@ -61,6 +61,48 @@ export const getStudentsBasicByClasses = async (classIds) => {
   return fetchAllRows(() => supabase.from('students').select('*').in('class_id', ids))
 }
 
+/** Lấy TẤT CẢ sinh viên của TẤT CẢ lớp + tất cả custom values */
+export const getAllStudentsWithAllCustomColumns = async () => {
+  // 1) Lấy hết sinh viên (phân trang)
+  const students = await fetchAllRows(() =>
+    supabase
+      .from('students')
+      .select('*, class:classes(id, class_name)')
+      .order('student_code', { ascending: true })
+  )
+  if (!students.length) return { students: [], columns: [] }
+
+  // 2) Lấy hết custom columns của tất cả lớp
+  const { data: allCols, error: colErr } = await supabase
+    .from('custom_columns')
+    .select('*')
+    .order('column_order', { ascending: true })
+  if (colErr) throw colErr
+
+  // 3) Lấy hết custom values (phân trang)
+  const values = await fetchAllRows(() =>
+    supabase.from('custom_values').select('id, student_id, column_id, value')
+  )
+
+  // 4) Gắn custom_values vào từng sinh viên
+  const valMap = new Map()
+  values.forEach((v) => {
+    if (!valMap.has(v.student_id)) valMap.set(v.student_id, [])
+    valMap.get(v.student_id).push({ id: v.id, column_id: v.column_id, value: v.value })
+  })
+
+  const mappedStudents = students.map((s) => ({
+    ...s,
+    class_name: s.class?.class_name,
+    custom_values: valMap.get(s.id) || []
+  }))
+
+  return {
+    students: mappedStudents,
+    columns: allCols || []
+  }
+}
+
 /** Bulk upsert sinh viên theo khóa (class_id, student_code) — dùng cho Import Excel */
 export const upsertStudentsBulk = async (rows) => {
   if (!rows?.length) return []
