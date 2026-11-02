@@ -241,8 +241,9 @@ export default function ExcelTable({
 
   const [rowData, setRowData] = useState(() => flattenStudents(initialStudents))
   const [quickFilter, setQuickFilter] = useState('')
+  const [filters, setFilters] = useState({}) // Dynamic filters: { field: value }
+  const [showFilterForm, setShowFilterForm] = useState(false)
   const [selectedIds, setSelectedIds] = useState([])
-  const [warningFilter, setWarningFilter] = useState('')
   const [colorMenu, setColorMenu] = useState(null)
 
   // Cell styles (màu ô): { studentId: { columnKey: colorValue } }
@@ -280,12 +281,48 @@ export default function ExcelTable({
     return () => { cancelled = true }
   }, [classInfo?.id])
 
-  // Áp dụng warning filter
+  // Lọc dữ liệu dựa trên bộ lọc động
   const filteredRowData = useMemo(() => {
-    if (!warningFilter) return rowData
-    const lvl = Number(warningFilter)
-    return rowData.filter((r) => Number(r.warning_level) === lvl)
-  }, [rowData, warningFilter])
+    return rowData.filter(row => {
+      // 1. Quick filter (Mã SV / Tên)
+      if (quickFilter) {
+        const q = quickFilter.toLowerCase()
+        const matchQuick = 
+          String(row.student_code || '').toLowerCase().includes(q) ||
+          String(row.full_name || '').toLowerCase().includes(q)
+        if (!matchQuick) return false
+      }
+
+      // 2. Dynamic filters from form
+      for (const [field, val] of Object.entries(filters)) {
+        if (val === undefined || val === null || val === '') continue
+        
+        const sRowVal = String(row[field] || '').toLowerCase()
+        const sFilterVal = String(val).toLowerCase()
+        
+        if (!sRowVal.includes(sFilterVal)) return false
+      }
+      return true
+    })
+  }, [rowData, quickFilter, filters])
+
+  // Danh sách các cột để lọc
+  const filterableColumns = useMemo(() => {
+    const cols = [
+      { field: 'warning_level', label: 'Mức độ cảnh báo', type: 'select', options: WARNING_OPTIONS },
+      { field: 'date_of_birth', label: 'Ngày sinh', type: 'text' },
+      { field: 'warning_reason', label: 'Lý do cảnh báo', type: 'text' },
+    ]
+
+    // Thêm các cột custom của lớp này
+    if (customColumns) {
+      customColumns.forEach(cc => {
+        cols.push({ field: `custom:${cc.id}`, label: cc.column_name, type: 'text' })
+      })
+    }
+
+    return cols
+  }, [customColumns])
 
   const columnDefs = useMemo(() => {
     return buildColumnDefs(customColumns, canEdit, editableColumns, cellStyles)
@@ -352,44 +389,38 @@ export default function ExcelTable({
     const api = gridRef.current?.api
     let targets = []
 
+    const selectedNodes = api.getSelectedNodes()
+    const focusedCell = api.getFocusedCell()
+
     if (ctxMenu) {
       const { studentId, columnKey } = ctxMenu
       targets = [{ studentId, columnKey }]
       setCtxMenu(null)
+    } else if (selectedNodes.length > 0 && focusedCell) {
+      // Nếu có chọn nhiều hàng, bôi màu cho cột đang focus của các hàng đó
+      const colId = focusedCell.column.getColId()
+      if (colId !== '__checkbox__' && colId !== '__index__') {
+        selectedNodes.forEach(node => {
+          targets.push({ studentId: node.data.id, columnKey: colId })
+        })
+      }
+    } else if (focusedCell) {
+      // Nếu không chọn hàng nào, chỉ bôi màu ô đang focus
+      const colId = focusedCell.column.getColId()
+      const node = api.getDisplayedRowAtIndex(focusedCell.rowIndex)
+      const sid = node?.data?.id
+      if (sid && colId !== '__checkbox__' && colId !== '__index__') {
+        targets = [{ studentId: sid, columnKey: colId }]
+      }
     }
 
-    try {
-      const ranges = api?.getCellRanges?.() || []
-      if (ranges.length > 0) {
-        const collected = []
-        ranges.forEach((r) => {
-          const startRow = r.startRow?.rowIndex
-          const endRow = r.endRow?.rowIndex
-          const colIds = r.columns.map((c) => c.getColId())
-          const minRow = Math.min(startRow ?? 0, endRow ?? 0)
-          const maxRow = Math.max(startRow ?? 0, endRow ?? 0)
-          for (let i = minRow; i <= maxRow; i++) {
-            const node = api.getDisplayedRowAtIndex(i)
-            const sid = node?.data?.id
-            if (!sid) continue
-            colIds.forEach((cid) => {
-              if (cid === '__checkbox__' || cid === '__index__') return
-              collected.push({ studentId: sid, columnKey: cid })
-            })
-          }
-        })
-        if (collected.length > 0) targets = collected
-      }
-    } catch (_) {}
-
     if (targets.length === 0) {
-      showError('Vui lòng chọn ô cần bôi màu')
+      showError('Vui lòng chọn hàng và click vào cột cần bôi màu')
       setColorMenu(null)
       return
     }
 
     setColorMenu(null)
-
     try {
       setCellStyles((prev) => {
         const next = { ...prev }
@@ -566,13 +597,14 @@ export default function ExcelTable({
             onChange={(e) => setQuickFilter(e.target.value)}
           />
         </div>
-        <Select
-          wrapperClass="w-full sm:w-48"
-          placeholder="Tất cả cấp độ cảnh báo"
-          value={warningFilter}
-          onChange={(e) => setWarningFilter(e.target.value)}
-          options={WARNING_OPTIONS}
-        />
+        
+        <Button 
+          variant={showFilterForm ? "primary" : "secondary"} 
+          onClick={() => setShowFilterForm(!showFilterForm)}
+        >
+          {showFilterForm ? "🔼 Đóng lọc" : "🔽 Bộ lọc nâng cao"}
+        </Button>
+
         <div className="flex-1" />
         <div className="flex flex-wrap gap-2">
           {canEdit && (
@@ -602,6 +634,37 @@ export default function ExcelTable({
         </div>
       </div>
 
+      {showFilterForm && (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-fade-in">
+          {filterableColumns.map(col => (
+            <div key={col.field} className="space-y-1">
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {col.label}
+              </label>
+              {col.type === 'select' ? (
+                <Select
+                  value={filters[col.field] || ''}
+                  onChange={(e) => setFilters(prev => ({ ...prev, [col.field]: e.target.value }))}
+                  options={col.options}
+                  placeholder={`Tất cả ${col.label.toLowerCase()}`}
+                />
+              ) : (
+                <Input
+                  placeholder={`Lọc ${col.label.toLowerCase()}...`}
+                  value={filters[col.field] || ''}
+                  onChange={(e) => setFilters(prev => ({ ...prev, [col.field]: e.target.value }))}
+                />
+              )}
+            </div>
+          ))}
+          <div className="col-span-full flex justify-end">
+            <Button variant="ghost" size="sm" onClick={() => setFilters({})}>
+              🧹 Xóa tất cả bộ lọc
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Bảng AG Grid */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div
@@ -616,7 +679,6 @@ export default function ExcelTable({
             rowHeight={42}
             headerHeight={44}
             rowSelection="multiple"
-            enableRangeSelection={true}
             suppressRowClickSelection={true}
             animateRows={true}
             getRowStyle={getRowStyle}

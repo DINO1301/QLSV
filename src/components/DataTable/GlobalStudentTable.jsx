@@ -226,12 +226,12 @@ export default function GlobalStudentTable({
 
   const [rowData, setRowData] = useState(() => flattenStudentsGlobal(initialStudents))
   const [quickFilter, setQuickFilter] = useState('')
-  const [warningFilter, setWarningFilter] = useState('')
-  const [classFilter, setClassFilter] = useState('')
+  const [filters, setFilters] = useState({}) // Dynamic filters: { field: value }
+  const [showFilterForm, setShowFilterForm] = useState(false)
   const [selectedIds, setSelectedIds] = useState([])
   const [cellStyles, setCellStyles] = useState({})
   const [ctxMenu, setCtxMenu] = useState(null)
-  const [colorMenu, setColorMenu] = useState(null) // { x, y } for toolbar button
+  const [colorMenu, setColorMenu] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -239,176 +239,118 @@ export default function GlobalStudentTable({
     setRowData(flattenStudentsGlobal(initialStudents))
   }, [initialStudents])
 
-  // Lọc dữ liệu dựa trên bộ lọc
+  // Lọc dữ liệu dựa trên bộ lọc động
   const filteredRowData = useMemo(() => {
-    let data = rowData
-    if (warningFilter !== '') {
-      data = data.filter(r => Number(r.warning_level) === Number(warningFilter))
-    }
-    if (classFilter !== '') {
-      data = data.filter(r => r.class_id === classFilter)
-    }
-    return data
-  }, [rowData, warningFilter, classFilter])
+    return rowData.filter(row => {
+      // 1. Quick filter (Mã SV / Tên)
+      if (quickFilter) {
+        const q = quickFilter.toLowerCase()
+        const matchQuick = 
+          String(row.student_code || '').toLowerCase().includes(q) ||
+          String(row.full_name || '').toLowerCase().includes(q)
+        if (!matchQuick) return false
+      }
 
-  const classOptions = useMemo(() => {
-    const map = new Map()
+      // 2. Dynamic filters from form
+      for (const [field, val] of Object.entries(filters)) {
+        if (val === undefined || val === null || val === '') continue
+        
+        let rowVal = row[field]
+        // Nếu là cột custom gcustom:ColName
+        if (field.startsWith('gcustom:')) {
+          const colName = field.replace('gcustom:', '')
+          const actualCol = allColumns.find(c => c.class_id === row.class_id && c.column_name === colName)
+          rowVal = actualCol ? row[`custom:${actualCol.id}`] : null
+        }
+
+        const sRowVal = String(rowVal || '').toLowerCase()
+        const sFilterVal = String(val).toLowerCase()
+        
+        if (!sRowVal.includes(sFilterVal)) return false
+      }
+      return true
+    })
+  }, [rowData, quickFilter, filters, allColumns])
+
+  // Danh sách các cột để lọc
+  const filterableColumns = useMemo(() => {
+    const cols = [
+      { field: 'class_id', label: 'Lớp', type: 'select', options: [] },
+      { field: 'warning_level', label: 'Mức độ cảnh báo', type: 'select', options: WARNING_OPTIONS },
+      { field: 'gender', label: 'Giới tính', type: 'text' },
+      { field: 'student_group', label: 'Nhóm', type: 'text' },
+      { field: 'status', label: 'Trạng thái', type: 'text' },
+    ]
+
+    // Thêm các cột custom duy nhất
+    const uniqueCustomNames = new Set()
+    allColumns.forEach(c => uniqueCustomNames.add(c.column_name))
+    Array.from(uniqueCustomNames).sort().forEach(name => {
+      cols.push({ field: `gcustom:${name}`, label: name, type: 'text' })
+    })
+
+    // Cập nhật options cho Lớp
+    const classMap = new Map()
     initialStudents.forEach(s => {
-      if (s.class_id && s.class?.class_name) {
-        map.set(s.class_id, s.class.class_name)
-      }
+      if (s.class_id && s.class?.class_name) classMap.set(s.class_id, s.class.class_name)
     })
-    return Array.from(map.entries()).map(([id, name]) => ({ value: id, label: name }))
-  }, [initialStudents])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const map = await getCellStylesAll()
-        if (!cancelled) setCellStyles(map)
-      } catch (_) {}
-    })()
-    return () => { cancelled = true }
-  }, [])
-
-  const uniqueColumnNames = useMemo(() => {
-    const names = new Set()
-    allColumns.forEach(c => names.add(c.column_name))
-    return Array.from(names).sort()
-  }, [allColumns])
-
-  const columnDefs = useMemo(() => {
-    return buildGlobalColumnDefs(uniqueColumnNames, allColumns, canEdit, cellStyles)
-  }, [uniqueColumnNames, allColumns, canEdit, cellStyles])
-
-  const defaultColDef = useMemo(() => ({
-    resizable: true,
-    sortable: true,
-    filter: true,
-    suppressMovable: false,
-  }), [])
-
-  const onCellValueChanged = useCallback(async (ev) => {
-    const { data, colDef, oldValue, newValue } = ev
-    if (oldValue === newValue) return
-
-    const field = colDef.field
-    const studentClassId = data.class_id
-
-    try {
-      if (field.startsWith('gcustom:')) {
-        const colName = field.replace('gcustom:', '')
-        const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
-        if (actualCol) {
-          await upsertCustomValue(data.id, actualCol.id, newValue ?? null)
-        }
-      } else {
-        const payload = { [field]: newValue ?? null }
-        await updateStudent(data.id, payload)
-        if (field === 'warning_level') {
-          insertLog({
-            action: 'UPDATE_WARNING',
-            class_id: data.class_id,
-            student_id: data.id,
-            old_data: { warning_level: oldValue },
-            new_data: { warning_level: newValue },
-          })
-        }
-      }
-      showSuccess('Đã lưu thay đổi')
-      setRowData((prev) =>
-        prev.map((r) => (r.id === data.id ? { ...r, [field]: newValue } : r))
-      )
-      onChanged?.('update')
-    } catch (err) {
-      showError(err.message || 'Lưu thất bại')
-      gridRef.current?.api?.refreshCells({ rowNodes: [ev.node], force: true })
-    }
-  }, [allColumns, showSuccess, showError, onChanged])
-
-  const onCellContextMenu = useCallback((params) => {
-    if (!canEdit) return
-    const e = params.event
-    if (e) e.preventDefault()
-    const sid = params.data?.id
-    const field = params.colDef?.field
-    if (!sid || !field || field === '__checkbox__' || field === '__index__') return
-
-    let colorKey = field
-    if (field.startsWith('gcustom:')) {
-      const colName = field.replace('gcustom:', '')
-      const studentClassId = params.data?.class_id
-      const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
-      if (actualCol) {
-        colorKey = `custom:${actualCol.id}`
-      } else {
-        return // Không có cột thực tế thì không bôi màu được
-      }
+    const classCol = cols.find(c => c.field === 'class_id')
+    if (classCol) {
+      classCol.options = Array.from(classMap.entries()).map(([id, name]) => ({ value: id, label: name }))
     }
 
-    setCtxMenu({
-      x: e ? e.clientX : 0,
-      y: e ? e.clientY : 0,
-      studentId: sid,
-      columnKey: colorKey,
-    })
-  }, [canEdit, allColumns])
+    return cols
+  }, [allColumns, initialStudents])
 
   const applyColor = useCallback(async (color) => {
-    // Nếu có ctxMenu -> bôi cho 1 ô hoặc range (chuột phải)
-    // Nếu không có ctxMenu nhưng có range selection -> bôi cho range
     const api = gridRef.current?.api
     let targets = []
 
-    if (ctxMenu) {
-      const { studentId, columnKey } = ctxMenu
-      targets = [{ studentId, columnKey }]
-      setCtxMenu(null)
+    // 1. Ưu tiên các hàng đang được tick chọn (checkbox)
+    const selectedNodes = api.getSelectedNodes()
+    const focusedCell = api.getFocusedCell()
+
+    if (selectedNodes.length > 0 && focusedCell) {
+      // Nếu có chọn nhiều hàng, bôi màu cho cột đang focus của các hàng đó
+      const colId = focusedCell.column.getColId()
+      if (colId !== '__checkbox__' && colId !== '__index__') {
+        selectedNodes.forEach(node => {
+          const sid = node.data.id
+          const studentClassId = node.data.class_id
+          let key = colId
+          if (colId.startsWith('gcustom:')) {
+            const colName = colId.replace('gcustom:', '')
+            const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
+            if (actualCol) key = `custom:${actualCol.id}`
+            else return
+          }
+          targets.push({ studentId: sid, columnKey: key })
+        })
+      }
+    } else if (focusedCell) {
+      // Nếu không chọn hàng nào, chỉ bôi màu ô đang focus
+      const colId = focusedCell.column.getColId()
+      const node = api.getDisplayedRowAtIndex(focusedCell.rowIndex)
+      const sid = node?.data?.id
+      if (sid && colId !== '__checkbox__' && colId !== '__index__') {
+        const studentClassId = node.data.class_id
+        let key = colId
+        if (colId.startsWith('gcustom:')) {
+          const colName = colId.replace('gcustom:', '')
+          const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
+          if (actualCol) key = `custom:${actualCol.id}`
+        }
+        if (key) targets = [{ studentId: sid, columnKey: key }]
+      }
     }
 
-    try {
-      const ranges = api?.getCellRanges?.() || []
-      if (ranges.length > 0) {
-        const collected = []
-        ranges.forEach((r) => {
-          const startRow = r.startRow?.rowIndex
-          const endRow = r.endRow?.rowIndex
-          const colIds = r.columns.map((c) => c.getColId())
-          const minRow = Math.min(startRow ?? 0, endRow ?? 0)
-          const maxRow = Math.max(startRow ?? 0, endRow ?? 0)
-          for (let i = minRow; i <= maxRow; i++) {
-            const node = api.getDisplayedRowAtIndex(i)
-            const sid = node?.data?.id
-            if (!sid) continue
-            const studentClassId = node.data.class_id
-
-            colIds.forEach((cid) => {
-              if (cid === '__checkbox__' || cid === '__index__') return
-              
-              let actualKey = cid
-              if (cid.startsWith('gcustom:')) {
-                const colName = cid.replace('gcustom:', '')
-                const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
-                if (actualCol) actualKey = `custom:${actualCol.id}`
-                else return
-              }
-              collected.push({ studentId: sid, columnKey: actualKey })
-            })
-          }
-        })
-        if (collected.length > 0) targets = collected
-      }
-    } catch (_) {}
-
     if (targets.length === 0) {
-      showError('Vui lòng chọn ô cần bôi màu')
+      showError('Vui lòng chọn hàng và click vào cột cần bôi màu')
       setColorMenu(null)
       return
     }
 
     setColorMenu(null)
-
     try {
       setCellStyles((prev) => {
         const next = { ...prev }
@@ -426,7 +368,7 @@ export default function GlobalStudentTable({
     } catch (err) {
       showError(err.message || 'Lưu màu thất bại')
     }
-  }, [ctxMenu, allColumns, showSuccess, showError])
+  }, [allColumns, showSuccess, showError])
 
   const openColorMenu = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -484,20 +426,14 @@ export default function GlobalStudentTable({
             onChange={(e) => setQuickFilter(e.target.value)}
           />
         </div>
-        <Select
-          wrapperClass="w-full sm:w-48"
-          placeholder="Tất cả các lớp"
-          value={classFilter}
-          onChange={(e) => setClassFilter(e.target.value)}
-          options={classOptions}
-        />
-        <Select
-          wrapperClass="w-full sm:w-48"
-          placeholder="Tất cả cấp độ cảnh báo"
-          value={warningFilter}
-          onChange={(e) => setWarningFilter(e.target.value)}
-          options={WARNING_OPTIONS}
-        />
+        
+        <Button 
+          variant={showFilterForm ? "primary" : "secondary"} 
+          onClick={() => setShowFilterForm(!showFilterForm)}
+        >
+          {showFilterForm ? "🔼 Đóng lọc" : "🔽 Bộ lọc nâng cao"}
+        </Button>
+
         <div className="flex-1" />
         <div className="flex flex-wrap gap-2">
           {canEdit && (
@@ -513,6 +449,37 @@ export default function GlobalStudentTable({
         </div>
       </div>
 
+      {showFilterForm && (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-fade-in">
+          {filterableColumns.map(col => (
+            <div key={col.field} className="space-y-1">
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                {col.label}
+              </label>
+              {col.type === 'select' ? (
+                <Select
+                  value={filters[col.field] || ''}
+                  onChange={(e) => setFilters(prev => ({ ...prev, [col.field]: e.target.value }))}
+                  options={col.options}
+                  placeholder={`Tất cả ${col.label.toLowerCase()}`}
+                />
+              ) : (
+                <Input
+                  placeholder={`Lọc ${col.label.toLowerCase()}...`}
+                  value={filters[col.field] || ''}
+                  onChange={(e) => setFilters(prev => ({ ...prev, [col.field]: e.target.value }))}
+                />
+              )}
+            </div>
+          ))}
+          <div className="col-span-full flex justify-end">
+            <Button variant="ghost" size="sm" onClick={() => setFilters({})}>
+              🧹 Xóa tất cả bộ lọc
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="ag-theme-quartz" style={{ height: 'calc(100vh - 400px)', minHeight: 500 }}>
           <AgGridReact
@@ -523,7 +490,6 @@ export default function GlobalStudentTable({
             rowHeight={42}
             headerHeight={44}
             rowSelection="multiple"
-            enableRangeSelection={true}
             suppressRowClickSelection={true}
             animateRows={true}
             onSelectionChanged={() => {
