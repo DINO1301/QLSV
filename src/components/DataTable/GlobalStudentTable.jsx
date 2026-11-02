@@ -302,6 +302,100 @@ export default function GlobalStudentTable({
     return cols
   }, [allColumns, initialStudents])
 
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const map = await getCellStylesAll()
+        if (!cancelled) setCellStyles(map)
+      } catch (_) {}
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const uniqueColumnNames = useMemo(() => {
+    const names = new Set()
+    allColumns.forEach(c => names.add(c.column_name))
+    return Array.from(names).sort()
+  }, [allColumns])
+
+  const columnDefs = useMemo(() => {
+    return buildGlobalColumnDefs(uniqueColumnNames, allColumns, canEdit, cellStyles)
+  }, [uniqueColumnNames, allColumns, canEdit, cellStyles])
+
+  const defaultColDef = useMemo(() => ({
+    resizable: true,
+    sortable: true,
+    filter: true,
+    suppressMovable: false,
+  }), [])
+
+  const onCellValueChanged = useCallback(async (ev) => {
+    const { data, colDef, oldValue, newValue } = ev
+    if (oldValue === newValue) return
+
+    const field = colDef.field
+    const studentClassId = data.class_id
+
+    try {
+      if (field.startsWith('gcustom:')) {
+        const colName = field.replace('gcustom:', '')
+        const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
+        if (actualCol) {
+          await upsertCustomValue(data.id, actualCol.id, newValue ?? null)
+        }
+      } else {
+        const payload = { [field]: newValue ?? null }
+        await updateStudent(data.id, payload)
+        if (field === 'warning_level') {
+          insertLog({
+            action: 'UPDATE_WARNING',
+            class_id: data.class_id,
+            student_id: data.id,
+            old_data: { warning_level: oldValue },
+            new_data: { warning_level: newValue },
+          })
+        }
+      }
+      showSuccess('Đã lưu thay đổi')
+      setRowData((prev) =>
+        prev.map((r) => (r.id === data.id ? { ...r, [field]: newValue } : r))
+      )
+      onChanged?.('update')
+    } catch (err) {
+      showError(err.message || 'Lưu thất bại')
+      gridRef.current?.api?.refreshCells({ rowNodes: [ev.node], force: true })
+    }
+  }, [allColumns, showSuccess, showError, onChanged])
+
+  const onCellContextMenu = useCallback((params) => {
+    if (!canEdit) return
+    const e = params.event
+    if (e) e.preventDefault()
+    const sid = params.data?.id
+    const field = params.colDef?.field
+    if (!sid || !field || field === '__checkbox__' || field === '__index__') return
+
+    let colorKey = field
+    if (field.startsWith('gcustom:')) {
+      const colName = field.replace('gcustom:', '')
+      const studentClassId = params.data?.class_id
+      const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
+      if (actualCol) {
+        colorKey = `custom:${actualCol.id}`
+      } else {
+        return // Không có cột thực tế thì không bôi màu được
+      }
+    }
+
+    setCtxMenu({
+      x: e ? e.clientX : 0,
+      y: e ? e.clientY : 0,
+      studentId: sid,
+      columnKey: colorKey,
+    })
+  }, [canEdit, allColumns])
+
   const applyColor = useCallback(async (color) => {
     const api = gridRef.current?.api
     let targets = []
