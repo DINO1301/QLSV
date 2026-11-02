@@ -402,29 +402,33 @@ export default function GlobalStudentTable({
     const api = gridRef.current?.api
     let targets = []
 
-    // 1. Ưu tiên các hàng đang được tick chọn (checkbox)
     const selectedNodes = api.getSelectedNodes()
     const focusedCell = api.getFocusedCell()
 
-    if (selectedNodes.length > 0 && focusedCell) {
-      // Nếu có chọn nhiều hàng, bôi màu cho cột đang focus của các hàng đó
-      const colId = focusedCell.column.getColId()
-      if (colId !== '__checkbox__' && colId !== '__index__') {
-        selectedNodes.forEach(node => {
-          const sid = node.data.id
-          const studentClassId = node.data.class_id
-          let key = colId
-          if (colId.startsWith('gcustom:')) {
-            const colName = colId.replace('gcustom:', '')
-            const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
-            if (actualCol) key = `custom:${actualCol.id}`
-            else return
-          }
-          targets.push({ studentId: sid, columnKey: key })
+    if (selectedNodes.length > 0) {
+      // Nếu có chọn hàng qua checkbox -> Bôi màu TOÀN BỘ DÒNG cho các hàng đó
+      selectedNodes.forEach(node => {
+        const sid = node.data.id
+        const studentClassId = node.data.class_id
+
+        // 1. Các cột hệ thống
+        const sysFields = [
+          'student_code', 'full_name', 'class_name', 'date_of_birth',
+          'warning_level', 'warning_reason', 'warning_date', 'warning_note'
+        ]
+        sysFields.forEach(field => {
+          targets.push({ studentId: sid, columnKey: field })
         })
-      }
+
+        // 2. Các cột tùy chỉnh của sinh viên đó
+        allColumns.forEach(col => {
+          if (col.class_id === studentClassId) {
+            targets.push({ studentId: sid, columnKey: `custom:${col.id}` })
+          }
+        })
+      })
     } else if (focusedCell) {
-      // Nếu không chọn hàng nào, chỉ bôi màu ô đang focus
+      // Nếu không chọn hàng nào qua checkbox -> Chỉ bôi màu Ô đang focus
       const colId = focusedCell.column.getColId()
       const node = api.getDisplayedRowAtIndex(focusedCell.rowIndex)
       const sid = node?.data?.id
@@ -435,13 +439,14 @@ export default function GlobalStudentTable({
           const colName = colId.replace('gcustom:', '')
           const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
           if (actualCol) key = `custom:${actualCol.id}`
+          else return
         }
-        if (key) targets = [{ studentId: sid, columnKey: key }]
+        targets = [{ studentId: sid, columnKey: key }]
       }
     }
 
     if (targets.length === 0) {
-      showError('Vui lòng chọn hàng và click vào cột cần bôi màu')
+      showError('Vui lòng chọn hàng (checkbox) hoặc click vào ô cần bôi màu')
       setColorMenu(null)
       return
     }

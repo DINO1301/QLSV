@@ -398,16 +398,29 @@ export default function ExcelTable({
       const { studentId, columnKey } = ctxMenu
       targets = [{ studentId, columnKey }]
       setCtxMenu(null)
-    } else if (selectedNodes.length > 0 && focusedCell) {
-      // Nếu có chọn nhiều hàng, bôi màu cho cột đang focus của các hàng đó
-      const colId = focusedCell.column.getColId()
-      if (colId !== '__checkbox__' && colId !== '__index__') {
-        selectedNodes.forEach(node => {
-          targets.push({ studentId: node.data.id, columnKey: colId })
+    } else if (selectedNodes.length > 0) {
+      // Nếu có chọn hàng qua checkbox -> Bôi màu TOÀN BỘ DÒNG cho các hàng đó
+      selectedNodes.forEach(node => {
+        const sid = node.data.id
+
+        // 1. Các cột hệ thống
+        const sysFields = [
+          'student_code', 'full_name', 'date_of_birth',
+          'warning_level', 'warning_reason', 'warning_date', 'warning_note'
+        ]
+        sysFields.forEach(field => {
+          targets.push({ studentId: sid, columnKey: field })
         })
-      }
+
+        // 2. Các cột tùy chỉnh
+        if (customColumns) {
+          customColumns.forEach(cc => {
+            targets.push({ studentId: sid, columnKey: `custom:${cc.id}` })
+          })
+        }
+      })
     } else if (focusedCell) {
-      // Nếu không chọn hàng nào, chỉ bôi màu ô đang focus
+      // Nếu không chọn hàng nào qua checkbox -> Chỉ bôi màu Ô đang focus
       const colId = focusedCell.column.getColId()
       const node = api.getDisplayedRowAtIndex(focusedCell.rowIndex)
       const sid = node?.data?.id
@@ -417,7 +430,7 @@ export default function ExcelTable({
     }
 
     if (targets.length === 0) {
-      showError('Vui lòng chọn hàng và click vào cột cần bôi màu')
+      showError('Vui lòng chọn hàng (checkbox) hoặc click vào ô cần bôi màu')
       setColorMenu(null)
       return
     }
