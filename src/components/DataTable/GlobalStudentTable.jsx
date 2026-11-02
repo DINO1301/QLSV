@@ -226,14 +226,39 @@ export default function GlobalStudentTable({
 
   const [rowData, setRowData] = useState(() => flattenStudentsGlobal(initialStudents))
   const [quickFilter, setQuickFilter] = useState('')
+  const [warningFilter, setWarningFilter] = useState('')
+  const [classFilter, setClassFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
   const [cellStyles, setCellStyles] = useState({})
   const [ctxMenu, setCtxMenu] = useState(null)
+  const [colorMenu, setColorMenu] = useState(null) // { x, y } for toolbar button
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     setRowData(flattenStudentsGlobal(initialStudents))
+  }, [initialStudents])
+
+  // Lọc dữ liệu dựa trên bộ lọc
+  const filteredRowData = useMemo(() => {
+    let data = rowData
+    if (warningFilter !== '') {
+      data = data.filter(r => Number(r.warning_level) === Number(warningFilter))
+    }
+    if (classFilter !== '') {
+      data = data.filter(r => r.class_id === classFilter)
+    }
+    return data
+  }, [rowData, warningFilter, classFilter])
+
+  const classOptions = useMemo(() => {
+    const map = new Map()
+    initialStudents.forEach(s => {
+      if (s.class_id && s.class?.class_name) {
+        map.set(s.class_id, s.class.class_name)
+      }
+    })
+    return Array.from(map.entries()).map(([id, name]) => ({ value: id, label: name }))
   }, [initialStudents])
 
   useEffect(() => {
@@ -330,36 +355,100 @@ export default function GlobalStudentTable({
     })
   }, [canEdit, allColumns])
 
+  const applyColor = useCallback(async (color) => {
+    // Nếu có ctxMenu -> bôi cho 1 ô hoặc range (chuột phải)
+    // Nếu không có ctxMenu nhưng có range selection -> bôi cho range
+    const api = gridRef.current?.api
+    let targets = []
+
+    if (ctxMenu) {
+      const { studentId, columnKey } = ctxMenu
+      targets = [{ studentId, columnKey }]
+      setCtxMenu(null)
+    }
+
+    try {
+      const ranges = api?.getCellRanges?.() || []
+      if (ranges.length > 0) {
+        const collected = []
+        ranges.forEach((r) => {
+          const startRow = r.startRow?.rowIndex
+          const endRow = r.endRow?.rowIndex
+          const colIds = r.columns.map((c) => c.getColId())
+          const minRow = Math.min(startRow ?? 0, endRow ?? 0)
+          const maxRow = Math.max(startRow ?? 0, endRow ?? 0)
+          for (let i = minRow; i <= maxRow; i++) {
+            const node = api.getDisplayedRowAtIndex(i)
+            const sid = node?.data?.id
+            if (!sid) continue
+            const studentClassId = node.data.class_id
+
+            colIds.forEach((cid) => {
+              if (cid === '__checkbox__' || cid === '__index__') return
+              
+              let actualKey = cid
+              if (cid.startsWith('gcustom:')) {
+                const colName = cid.replace('gcustom:', '')
+                const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
+                if (actualCol) actualKey = `custom:${actualCol.id}`
+                else return
+              }
+              collected.push({ studentId: sid, columnKey: actualKey })
+            })
+          }
+        })
+        if (collected.length > 0) targets = collected
+      }
+    } catch (_) {}
+
+    if (targets.length === 0) {
+      showError('Vui lòng chọn ô cần bôi màu')
+      setColorMenu(null)
+      return
+    }
+
+    setColorMenu(null)
+
+    try {
+      setCellStyles((prev) => {
+        const next = { ...prev }
+        targets.forEach(({ studentId: sid, columnKey: key }) => {
+          if (!next[sid]) next[sid] = {}
+          if (color) next[sid][key] = color
+          else delete next[sid][key]
+        })
+        return next
+      })
+      await Promise.all(targets.map(({ studentId: sid, columnKey: key }) =>
+        upsertCellStyle(sid, key, color || null)
+      ))
+      showSuccess(color ? 'Đã áp dụng màu' : 'Đã xóa màu')
+    } catch (err) {
+      showError(err.message || 'Lưu màu thất bại')
+    }
+  }, [ctxMenu, allColumns, showSuccess, showError])
+
+  const openColorMenu = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setColorMenu({
+      x: rect.left,
+      y: rect.bottom + 5
+    })
+  }
+
   useEffect(() => {
-    if (!ctxMenu) return
-    const close = () => setCtxMenu(null)
+    if (!ctxMenu && !colorMenu) return
+    const close = () => {
+      setCtxMenu(null)
+      setColorMenu(null)
+    }
     window.addEventListener('click', close)
     window.addEventListener('scroll', close, true)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('scroll', close, true)
     }
-  }, [ctxMenu])
-
-  const applyColor = useCallback(async (color) => {
-    if (!ctxMenu) return
-    const { studentId, columnKey } = ctxMenu
-    setCtxMenu(null)
-
-    try {
-      setCellStyles((prev) => {
-        const next = { ...prev }
-        if (!next[studentId]) next[studentId] = {}
-        if (color) next[studentId][columnKey] = color
-        else delete next[studentId][columnKey]
-        return next
-      })
-      await upsertCellStyle(studentId, columnKey, color || null)
-      showSuccess(color ? 'Đã áp dụng màu' : 'Đã xóa màu')
-    } catch (err) {
-      showError(err.message || 'Lưu màu thất bại')
-    }
-  }, [ctxMenu, showSuccess, showError])
+  }, [ctxMenu, colorMenu])
 
   const performDelete = async () => {
     setDeleting(true)
@@ -395,24 +484,46 @@ export default function GlobalStudentTable({
             onChange={(e) => setQuickFilter(e.target.value)}
           />
         </div>
+        <Select
+          wrapperClass="w-full sm:w-48"
+          placeholder="Tất cả các lớp"
+          value={classFilter}
+          onChange={(e) => setClassFilter(e.target.value)}
+          options={classOptions}
+        />
+        <Select
+          wrapperClass="w-full sm:w-48"
+          placeholder="Tất cả cấp độ cảnh báo"
+          value={warningFilter}
+          onChange={(e) => setWarningFilter(e.target.value)}
+          options={WARNING_OPTIONS}
+        />
         <div className="flex-1" />
-        {canEdit && selectedIds.length > 0 && (
-          <Button variant="danger" onClick={() => setConfirmDelete('bulk')}>
-            🗑️ Xóa ({selectedIds.length})
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {canEdit && (
+            <Button variant="secondary" onClick={openColorMenu}>
+              🎨 Bôi màu
+            </Button>
+          )}
+          {canEdit && selectedIds.length > 0 && (
+            <Button variant="danger" onClick={() => setConfirmDelete('bulk')}>
+              🗑️ Xóa ({selectedIds.length})
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="ag-theme-quartz" style={{ height: 'calc(100vh - 400px)', minHeight: 500 }}>
           <AgGridReact
             ref={gridRef}
-            rowData={rowData}
+            rowData={filteredRowData}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             rowHeight={42}
             headerHeight={44}
             rowSelection="multiple"
+            enableRangeSelection={true}
             suppressRowClickSelection={true}
             animateRows={true}
             onSelectionChanged={() => {
@@ -430,17 +541,19 @@ export default function GlobalStudentTable({
         </div>
       </div>
 
-      {ctxMenu && (
+      {/* Context menu / Toolbar color picker */}
+      {(ctxMenu || colorMenu) && (
         <div
           className="fixed z-[1000] bg-white border border-slate-200 rounded-lg shadow-xl p-2 animate-fade-in"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={{ left: (ctxMenu || colorMenu).x, top: (ctxMenu || colorMenu).y }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="text-xs text-slate-500 px-2 py-1 font-medium">🎨 Bôi màu ô</div>
+          <div className="text-xs text-slate-500 px-2 py-1 font-medium">🎨 Chọn màu bôi</div>
           <div className="grid grid-cols-4 gap-1 p-1">
             {CELL_COLOR_OPTIONS.map((c) => (
               <button
                 key={c.value}
+                title={c.label}
                 onClick={() => applyColor(c.value)}
                 className="w-7 h-7 rounded border border-slate-300 hover:scale-110 transition-transform"
                 style={{ backgroundColor: c.bg }}

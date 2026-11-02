@@ -243,6 +243,7 @@ export default function ExcelTable({
   const [quickFilter, setQuickFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
   const [warningFilter, setWarningFilter] = useState('')
+  const [colorMenu, setColorMenu] = useState(null)
 
   // Cell styles (màu ô): { studentId: { columnKey: colorValue } }
   const [cellStyles, setCellStyles] = useState({})
@@ -348,13 +349,15 @@ export default function ExcelTable({
    * Áp dụng màu cho 1 ô (hoặc nhiều ô đang chọn nếu có range selection)
    */
   const applyColor = useCallback(async (color) => {
-    if (!ctxMenu) return
-    const { studentId, columnKey } = ctxMenu
-    setCtxMenu(null)
-
-    // Lấy danh sách các ô trong range selection (nếu có)
     const api = gridRef.current?.api
-    let targets = [{ studentId, columnKey }]
+    let targets = []
+
+    if (ctxMenu) {
+      const { studentId, columnKey } = ctxMenu
+      targets = [{ studentId, columnKey }]
+      setCtxMenu(null)
+    }
+
     try {
       const ranges = api?.getCellRanges?.() || []
       if (ranges.length > 0) {
@@ -377,10 +380,17 @@ export default function ExcelTable({
         })
         if (collected.length > 0) targets = collected
       }
-    } catch (_) { /* không có range selection */ }
+    } catch (_) {}
+
+    if (targets.length === 0) {
+      showError('Vui lòng chọn ô cần bôi màu')
+      setColorMenu(null)
+      return
+    }
+
+    setColorMenu(null)
 
     try {
-      // Cập nhật state local trước để UI nhạy
       setCellStyles((prev) => {
         const next = { ...prev }
         targets.forEach(({ studentId: sid, columnKey: key }) => {
@@ -390,7 +400,6 @@ export default function ExcelTable({
         })
         return next
       })
-      // Lưu DB
       await Promise.all(targets.map(({ studentId: sid, columnKey: key }) =>
         upsertCellStyle(sid, key, color || null)
       ))
@@ -399,6 +408,28 @@ export default function ExcelTable({
       showError(err.message || 'Lưu màu thất bại')
     }
   }, [ctxMenu, showSuccess, showError])
+
+  const openColorMenu = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setColorMenu({
+      x: rect.left,
+      y: rect.bottom + 5
+    })
+  }
+
+  useEffect(() => {
+    if (!ctxMenu && !colorMenu) return
+    const close = () => {
+      setCtxMenu(null)
+      setColorMenu(null)
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [ctxMenu, colorMenu])
 
   // Áp dụng quick filter
   useEffect(() => {
@@ -545,6 +576,11 @@ export default function ExcelTable({
         <div className="flex-1" />
         <div className="flex flex-wrap gap-2">
           {canEdit && (
+            <Button variant="secondary" onClick={openColorMenu}>
+              🎨 Bôi màu
+            </Button>
+          )}
+          {canEdit && (
             <Button variant="success" onClick={() => setNewStudentOpen(true)}>
               ➕ Thêm sinh viên
             </Button>
@@ -612,14 +648,14 @@ export default function ExcelTable({
         </div>
       </div>
 
-      {/* Context menu: Bôi màu ô */}
-      {ctxMenu && (
+      {/* Context menu / Toolbar color picker */}
+      {(ctxMenu || colorMenu) && (
         <div
           className="fixed z-[1000] bg-white border border-slate-200 rounded-lg shadow-xl p-2 animate-fade-in"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={{ left: (ctxMenu || colorMenu).x, top: (ctxMenu || colorMenu).y }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="text-xs text-slate-500 px-2 py-1 font-medium">🎨 Bôi màu ô</div>
+          <div className="text-xs text-slate-500 px-2 py-1 font-medium">🎨 Chọn màu bôi</div>
           <div className="grid grid-cols-4 gap-1 p-1">
             {CELL_COLOR_OPTIONS.map((c) => (
               <button
