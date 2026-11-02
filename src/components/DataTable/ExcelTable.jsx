@@ -309,6 +309,8 @@ export default function ExcelTable({
   // Danh sách các cột để lọc
   const filterableColumns = useMemo(() => {
     const cols = [
+      { field: 'student_code', label: 'Mã sinh viên', type: 'text' },
+      { field: 'full_name', label: 'Họ tên', type: 'text' },
       { field: 'warning_level', label: 'Mức độ cảnh báo', type: 'select', options: WARNING_OPTIONS },
       { field: 'date_of_birth', label: 'Ngày sinh', type: 'text' },
       { field: 'warning_reason', label: 'Lý do cảnh báo', type: 'text' },
@@ -441,6 +443,7 @@ export default function ExcelTable({
   }, [ctxMenu, showSuccess, showError])
 
   const openColorMenu = (e) => {
+    e.stopPropagation() // Ngăn sự kiện bubble lên window làm đóng menu ngay lập tức
     const rect = e.currentTarget.getBoundingClientRect()
     setColorMenu({
       x: rect.left,
