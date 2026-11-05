@@ -10,11 +10,11 @@ import { PageLoader, Badge, Spinner } from '../components/UI/Skeleton'
 import { getAllClasses, createClass } from '../services/classService'
 import { getColumnsByClass, createColumn, upsertCustomValuesBulk } from '../services/columnService'
 import {
-  getStudentsBasicByClasses, upsertStudentsBulk,
+  getStudentsBasicByClasses, upsertStudentsBulk, getStudentsByCodes
 } from '../services/studentService'
 import { parseExcelFile } from '../services/excelService'
 import { insertLog } from '../services/logService'
-import { getMyPermissionForClass } from '../services/permissionService'
+import { getMyPermissionForClass, upsertClassPermission } from '../services/permissionService'
 import { DATA_TYPES } from '../utils/constants'
 import { cn } from '../utils/helpers'
 
@@ -257,6 +257,40 @@ export default function ImportExcel() {
     setValidating(true)
     const result = []
 
+    // 1) Xác định các lớp liên quan để fetch dữ liệu đối soát
+    const usedClassNames = new Set()
+    previewRows.forEach(row => {
+      let className = ''
+      if (classHeader) {
+        className = String(row[classHeader] ?? '').trim()
+      }
+      if (!className && selectedClasses.length === 1) {
+        const c = classes.find(x => x.id === selectedClasses[0])
+        className = c?.class_name || ''
+      }
+      if (className) usedClassNames.add(className.toLowerCase())
+    })
+
+    const usedClassIdArr = []
+    selectedClasses.forEach(id => usedClassIdArr.push(id))
+    Array.from(usedClassNames).forEach(name => {
+      const c = classMap[name]
+      if (c && !usedClassIdArr.includes(c.id)) usedClassIdArr.push(c.id)
+    })
+
+    // 2) Fetch sinh viên hiện có để đối soát tên
+    let existingMap = new Map()
+    try {
+      if (usedClassIdArr.length > 0) {
+        const existingList = await getStudentsBasicByClasses(usedClassIdArr)
+        existingList.forEach((s) => {
+          existingMap.set(`${s.class_id}|${String(s.student_code).trim()}`, s)
+        })
+      }
+    } catch (err) {
+      console.error('Lỗi fetch sinh viên đối soát:', err)
+    }
+
     const mappedCustom = Object.entries(mapping)
       .filter(([_, v]) => v.type === 'custom')
       .map(([excel, v]) => ({ excel, column: v.column }))
@@ -315,12 +349,27 @@ export default function ImportExcel() {
         }
       })
 
-      // Yêu cầu Mã sinh viên HOẶC Họ tên (thay vì bắt buộc cả hai)
+      // Yêu cầu bắt buộc cả Mã sinh viên VÀ Họ tên
       const studentCodeVal = payload.student_code?.toString().trim()
       const fullNameVal = payload.full_name?.toString().trim()
 
-      if (!studentCodeVal && !fullNameVal) {
-        errors.push('Thiếu Mã sinh viên hoặc Họ tên')
+      if (!studentCodeVal) {
+        errors.push('Thiếu Mã sinh viên')
+      }
+      if (!fullNameVal) {
+        errors.push('Thiếu Họ tên')
+      }
+
+      // Đối soát với dữ liệu hiện có
+      if (studentCodeVal && fullNameVal && payload.__class_id__) {
+        const existing = existingMap.get(`${payload.__class_id__}|${studentCodeVal}`)
+        if (existing) {
+          const existingName = String(existing.full_name || '').trim().toLowerCase()
+          const inputName = fullNameVal.toLowerCase()
+          if (existingName !== inputName) {
+            errors.push(`Mã SV ${studentCodeVal} đã tồn tại với tên khác: "${existing.full_name}"`)
+          }
+        }
       }
 
       // warning_level parse
@@ -382,34 +431,101 @@ export default function ImportExcel() {
       const valid = validated.filter((v) => v.__valid__)
       if (valid.length === 0) throw new Error('Không có dòng hợp lệ để import')
 
-      // 1) Tạo các lớp mới (nếu autoCreateClass)
+      // 1) Tìm kiếm sinh viên trùng khớp trên toàn hệ thống để xác định lớp
+      const studentCodes = Array.from(new Set(valid.map(v => String(v.student_code).trim()).filter(Boolean)))
+      const globalStudents = await getStudentsByCodes(studentCodes)
+      
+      // Map: code|name_lower -> class_id
+      const globalLookup = new Map()
+      globalStudents.forEach(s => {
+        const key = `${String(s.student_code).trim()}|${String(s.full_name || '').trim().toLowerCase()}`
+        globalLookup.set(key, s.class_id)
+      })
+
+      // 2) Xác định lớp cho từng dòng
       const classIdMap = { ...classMap } // name(lower) -> class obj
+      const rowsToProcess = []
+      let backupClassObj = null
+
+      for (const v of valid) {
+        let className = String(v.__class_name__ || '').trim().toLowerCase()
+        let classObj = classIdMap[className]
+        
+        // Nếu không có tên lớp trong Excel, tìm theo global lookup
+        if (!classObj && !className) {
+          const code = String(v.student_code).trim()
+          const fullName = String(v.full_name || '').trim().toLowerCase()
+          const globalClassId = globalLookup.get(`${code}|${fullName}`)
+          
+          if (globalClassId) {
+            // Thử tìm trong danh sách classes hiện có
+            classObj = classes.find(c => c.id === globalClassId)
+            // Nếu không thấy trong classes (có thể do chưa load hết), nhưng ta có globalClassId
+            // Ở đây ta giả định classId này hợp lệ. Để an toàn, ta cần class object đầy đủ.
+            // Tạm thời lấy từ danh sách classes, nếu không thấy thì sẽ coi như cần lớp dự phòng
+            // hoặc fetch thêm thông tin lớp. Tuy nhiên, trong hệ thống này, classes thường đã được load ở Step 1.
+          }
+        }
+
+        rowsToProcess.push({ ...v, __target_class__: classObj })
+      }
+
+      // 3) Tạo lớp dự phòng nếu có sinh viên không xác định được lớp
+      const needsBackupClass = rowsToProcess.some(r => !r.__target_class__)
+      if (needsBackupClass) {
+        const now = new Date()
+        const backupName = `Lớp dự phòng ${now.getDate()}/${now.getMonth() + 1} ${now.getHours()}:${now.getMinutes()}`
+        backupClassObj = await createClass({ 
+          class_name: backupName,
+          description: 'Lớp tự động tạo cho sinh viên không xác định được lớp khi import'
+        })
+        
+        // Gán quyền cho người tạo lớp dự phòng
+        if (profile?.id) {
+          await upsertClassPermission(profile.id, backupClassObj.id, true, true)
+        }
+
+        classIdMap[backupName.toLowerCase()] = backupClassObj
+        // Cập nhật các dòng chưa có lớp
+        rowsToProcess.forEach(r => {
+          if (!r.__target_class__) r.__target_class__ = backupClassObj
+        })
+      }
+
+      // 4) Tạo các lớp mới (nếu autoCreateClass và có tên lớp trong file)
       const newClassNames = new Set()
-      valid.forEach((v) => {
-        const name = String(v.__class_name__ || '').trim().toLowerCase()
+      rowsToProcess.forEach((r) => {
+        const name = String(r.__class_name__ || '').trim().toLowerCase()
         if (name && !classIdMap[name]) newClassNames.add(name)
       })
 
-      const createdClassIds = []
       for (const name of newClassNames) {
         try {
           const nc = await createClass({ class_name: name })
           classIdMap[name] = nc
-          createdClassIds.push(nc.id)
-        } catch (_) { /* lớp có thể đã tạo bởi process khác */ }
+          
+          // Gán quyền cho người tạo lớp (để có thể xem ngay trên Dashboard)
+          if (profile?.id) {
+            await upsertClassPermission(profile.id, nc.id, true, true)
+          }
+          
+          // Cập nhật lại target_class cho các dòng dùng tên lớp này
+          rowsToProcess.forEach(r => {
+            if (String(r.__class_name__ || '').trim().toLowerCase() === name) {
+              r.__target_class__ = nc
+            }
+          })
+        } catch (_) { }
       }
 
-      // 2) Các lớp liên quan (lớp của dữ liệu import + lớp đã chọn)
+      // 5) Các lớp liên quan (để fetch custom columns và existing students)
       const usedClassIds = new Set()
-      valid.forEach((v) => {
-        const name = String(v.__class_name__ || '').trim().toLowerCase()
-        if (classIdMap[name]) usedClassIds.add(classIdMap[name].id)
+      rowsToProcess.forEach(r => {
+        if (r.__target_class__) usedClassIds.add(r.__target_class__.id)
       })
-      selectedClasses.forEach((id) => usedClassIds.add(id))
       const usedClassIdArr = Array.from(usedClassIds)
 
-      // 3) Tạo/Tìm các cột tùy chỉnh cho từng lớp
-      // Gộp cả cột mới và cột đã map (để đảm bảo đồng bộ ID theo tên lớp)
+      // 6) Tạo/Tìm các cột tùy chỉnh cho từng lớp
       const customMappingHeaders = Object.entries(mapping)
         .filter(([_, v]) => v.type === 'new_custom' || v.type === 'custom')
         .map(([h, v]) => ({
@@ -434,7 +550,6 @@ export default function ImportExcel() {
             newColumnIdMap[header][cid] = found.id
             continue 
           }
-          // Nếu không tìm thấy cột cùng tên trong lớp này, tự động tạo mới
           try {
             const col = await createColumn({
               class_id: cid,
@@ -444,47 +559,41 @@ export default function ImportExcel() {
             })
             newColumnIdMap[header][cid] = col.id
             colsByClass[cid]?.set(key, col)
-          } catch (_) { /* có thể cột đã tồn tại */ }
+          } catch (_) { }
         }
       }
 
-      // 4) Lấy 1 lần toàn bộ sinh viên hiện có của các lớp liên quan
+      // 7) Lấy 1 lần toàn bộ sinh viên hiện có của các lớp liên quan
       const existingList = await getStudentsBasicByClasses(usedClassIdArr)
       const existingMap = new Map()
       existingList.forEach((s) => {
         existingMap.set(`${s.class_id}|${String(s.student_code).trim()}`, s)
       })
 
-      // 5) Gộp dữ liệu: giữ nguyên giá trị cũ, chỉ ghi đè bằng ô có giá trị mới
+      // 8) Gộp dữ liệu: giữ nguyên giá trị cũ, chỉ ghi đè bằng ô có giá trị mới
       const payloadMap = new Map() // key -> payload (loại trùng, dòng sau thắng)
       const rowMeta = new Map()    // key -> { isNew, custom_values, new_custom_values }
-      for (const v of valid) {
-        let name = String(v.__class_name__ || '').trim().toLowerCase()
-        let classObj = classIdMap[name]
-
-        // Nếu không có tên lớp, thử dùng lớp đầu tiên trong danh sách đã chọn
-        if (!classObj && !name && selectedClasses.length > 0) {
-          const firstSelectedId = selectedClasses[0]
-          classObj = classes.find(c => c.id === firstSelectedId)
-        }
-
+      
+      for (const r of rowsToProcess) {
+        const classObj = r.__target_class__
         if (!classObj) continue
+        
         const classId = classObj.id
-        const code = String(v.student_code).trim()
+        const code = String(r.student_code).trim()
         const key = `${classId}|${code}`
 
         const existing = existingMap.get(key)
         const payload = existing
           ? { ...existing }
           : { class_id: classId, student_code: code }
-        // Không gửi lại các trường do DB tự sinh
+        
         delete payload.id
         delete payload.created_at
         delete payload.updated_at
 
         SYSTEM_FIELDS.forEach((k) => {
-          if (v[k] !== undefined && v[k] !== null && String(v[k]).trim() !== '') {
-            payload[k] = (k === 'student_code' || k === 'full_name') ? String(v[k]).trim() : v[k]
+          if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+            payload[k] = (k === 'student_code' || k === 'full_name') ? String(r[k]).trim() : r[k]
           }
         })
         payload.class_id = classId
@@ -493,12 +602,12 @@ export default function ImportExcel() {
         payloadMap.set(key, payload)
         rowMeta.set(key, {
           isNew: !existing,
-          custom_values: v.custom_values || {},
-          new_custom_values: v.new_custom_values || {},
+          custom_values: r.custom_values || {},
+          new_custom_values: r.new_custom_values || {},
         })
       }
 
-      // 6) Bulk upsert sinh viên theo (class_id, student_code)
+      // 9) Bulk upsert sinh viên theo (class_id, student_code)
       const payloadList = Array.from(payloadMap.values())
       const upserted = await upsertStudentsBulk(payloadList)
 
@@ -519,7 +628,6 @@ export default function ImportExcel() {
 
         const [classId] = key.split('|')
 
-        // Custom values (cả cột đã map và cột mới)
         Object.entries({ ...meta.custom_values, ...meta.new_custom_values }).forEach(([header, val]) => {
           const colId = newColumnIdMap[header]?.[classId]
           if (colId && val !== null && val !== undefined) {
@@ -528,7 +636,7 @@ export default function ImportExcel() {
         })
       }
 
-      // 7) Bulk upsert custom values
+      // 10) Bulk upsert custom values
       if (cvBulk.length) await upsertCustomValuesBulk(cvBulk)
 
       // Log
@@ -538,7 +646,7 @@ export default function ImportExcel() {
           file: file?.name,
           inserted: insertedCount,
           updated: updatedCount,
-          new_classes: newClassNames.size,
+          new_classes: newClassNames.size + (backupClassObj ? 1 : 0),
           new_columns: customMappingHeaders.length,
         },
       })
@@ -548,7 +656,7 @@ export default function ImportExcel() {
         inserted: insertedCount,
         updated: updatedCount,
         errors: validated.length - insertedCount - updatedCount,
-        newClasses: newClassNames.size,
+        newClasses: newClassNames.size + (backupClassObj ? 1 : 0),
         newColumns: customMappingHeaders.length,
       })
       setConfirmImport(false)

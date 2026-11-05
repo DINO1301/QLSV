@@ -218,6 +218,7 @@ export function flattenStudentsGlobal(students) {
 export default function GlobalStudentTable({
   students: initialStudents,
   columns: allColumns,
+  classes = [], // Nhận danh sách lớp đầy đủ từ Dashboard
   canEdit,
   onChanged,
 }) {
@@ -291,18 +292,21 @@ export default function GlobalStudentTable({
       cols.push({ field: `gcustom:${name}`, label: name, type: 'text' })
     })
 
-    // Cập nhật options cho Lớp
-    const classMap = new Map()
-    initialStudents.forEach(s => {
-      if (s.class_id && s.class?.class_name) classMap.set(s.class_id, s.class.class_name)
-    })
+    // Cập nhật options cho Lớp từ danh sách lớp truyền vào (đầy đủ hơn là từ data sinh viên)
     const classCol = cols.find(c => c.field === 'class_id')
-    if (classCol) {
+    if (classCol && classes.length > 0) {
+      classCol.options = classes.map(c => ({ value: c.id, label: c.class_name }))
+    } else if (classCol) {
+      // Fallback nếu không có prop classes (dùng data sinh viên như cũ)
+      const classMap = new Map()
+      initialStudents.forEach(s => {
+        if (s.class_id && s.class?.class_name) classMap.set(s.class_id, s.class.class_name)
+      })
       classCol.options = Array.from(classMap.entries()).map(([id, name]) => ({ value: id, label: name }))
     }
 
     return cols
-  }, [allColumns, initialStudents])
+  }, [allColumns, initialStudents, classes])
 
   useEffect(() => {
     let cancelled = false

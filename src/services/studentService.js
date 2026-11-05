@@ -103,6 +103,16 @@ export const getAllStudentsWithAllCustomColumns = async () => {
   }
 }
 
+/** Lấy sinh viên theo danh sách mã sinh viên (dùng cho global lookup khi import) */
+export const getStudentsByCodes = async (codes) => {
+  if (!codes?.length) return []
+  return fetchAllRows(() => 
+    supabase.from('students')
+      .select('id, class_id, student_code, full_name')
+      .in('student_code', codes)
+  )
+}
+
 /** Bulk upsert sinh viên theo khóa (class_id, student_code) — dùng cho Import Excel */
 export const upsertStudentsBulk = async (rows) => {
   if (!rows?.length) return []

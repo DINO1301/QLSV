@@ -149,6 +149,9 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="md" onClick={loadAll} className="bg-white/10 text-white hover:bg-white/20 border-white/20">
+              🔄 Làm mới
+            </Button>
             <Link to="/classes">
               <Button variant="secondary" size="md" className="bg-white/10 text-white hover:bg-white/20 border-white/20">
                 📚 Quản lý lớp
@@ -290,7 +293,14 @@ export default function Dashboard() {
       </Card>
 
       {/* Quản lý sinh viên tổng hợp */}
-      <Card title="Quản lý sinh viên (Tất cả các lớp)">
+      <Card 
+        title="Quản lý sinh viên (Tất cả các lớp)"
+        actions={
+          <Button variant="ghost" size="sm" onClick={loadTableData} disabled={tableLoading}>
+            🔄 Tải lại bảng
+          </Button>
+        }
+      >
         {tableLoading ? (
           <div className="py-20 flex flex-col items-center justify-center space-y-4">
             <div className="w-10 h-10 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
@@ -300,7 +310,8 @@ export default function Dashboard() {
           <GlobalStudentTable
             students={globalStudents}
             columns={globalColumns}
-            canEdit={isAdmin} // Chỉ Admin được sửa ở Dashboard global hoặc tùy phân quyền
+            classes={classList} // Thêm classList để hiển thị bộ lọc lớp đầy đủ
+            canEdit={isAdmin} 
             onChanged={(signal) => {
               if (signal === 'delete' || signal === 'update') {
                 // Có thể reload stats nếu cần
