@@ -14,16 +14,16 @@ export const getUserPermissions = async (userId) => {
 export const getMyPermissionForClass = async (classId, userId) => {
   const { data, error } = await supabase
     .from('class_permissions')
-    .select('can_view, can_edit, editable_columns')
+    .select('can_view, can_edit, editable_columns, visible_columns')
     .eq('user_id', userId)
     .eq('class_id', classId)
     .maybeSingle()
   if (error) throw error
-  return data || { can_view: false, can_edit: false, editable_columns: [] }
+  return data || { can_view: false, can_edit: false, editable_columns: [], visible_columns: [] }
 }
 
 /** Cập nhật / gán quyền user theo lớp (dùng upsert) */
-export const upsertClassPermission = async (userId, classId, canView, canEdit, editableColumns = []) => {
+export const upsertClassPermission = async (userId, classId, canView, canEdit, editableColumns = [], visibleColumns = []) => {
   const { data, error } = await supabase
     .from('class_permissions')
     .upsert(
@@ -33,6 +33,7 @@ export const upsertClassPermission = async (userId, classId, canView, canEdit, e
         can_view: canView,
         can_edit: canEdit,
         editable_columns: editableColumns,
+        visible_columns: visibleColumns,
       },
       { onConflict: 'user_id, class_id' }
     )

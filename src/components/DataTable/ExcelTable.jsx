@@ -26,14 +26,21 @@ import Modal, { ConfirmDialog } from '../UI/Modal'
  * @param {Array} customColumns - danh sách cột tùy chỉnh
  * @param {boolean} canEdit - user có quyền sửa lớp không
  * @param {Array<string>|null} editableColumns - danh sách key cột được phép sửa (null = admin = tất cả)
+ * @param {Array<string>|null} visibleColumns - danh sách key cột được phép xem (null = admin = tất cả)
  * @param {Object} cellStyles - map { studentId: { columnKey: colorValue } }
  */
-export function buildColumnDefs(customColumns, canEdit, editableColumns = null, cellStyles = {}) {
+export function buildColumnDefs(customColumns, canEdit, editableColumns = null, visibleColumns = null, cellStyles = {}) {
   // Kiểm tra 1 cột có được sửa không
   const isEditable = (field) => {
     if (!canEdit) return false
     if (editableColumns === null || editableColumns === undefined) return true // admin
     return editableColumns.includes(field)
+  }
+
+  // Kiểm tra 1 cột có được xem không
+  const isVisible = (field) => {
+    if (visibleColumns === null || visibleColumns === undefined) return true // admin
+    return visibleColumns.includes(field)
   }
 
   // Tạo cellStyle function dùng chung: lấy màu từ cellStyles map
@@ -77,6 +84,7 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
       headerName: 'Mã SV', field: 'student_code',
       width: 120, pinned: 'left', lockPinned: true,
       editable: isEditable('student_code'),
+      hide: !isVisible('student_code'),
       cellStyle: makeCellStyle({ fontWeight: '600', color: '#1e40af' }),
       singleClickEdit: true,
     },
@@ -84,12 +92,14 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
       headerName: 'Họ tên', field: 'full_name',
       width: 220, pinned: 'left', lockPinned: true,
       editable: isEditable('full_name'),
+      hide: !isVisible('full_name'),
       cellStyle: makeCellStyle({ fontWeight: '500' }),
       singleClickEdit: false,
     },
     {
       headerName: 'Ngày sinh', field: 'date_of_birth',
       width: 130, editable: isEditable('date_of_birth'),
+      hide: !isVisible('date_of_birth'),
       cellEditor: 'agDateStringCellEditor',
       valueFormatter: (p) => formatDate(p.value, 'yyyy-MM-dd'),
       cellStyle: makeCellStyle(),
@@ -97,6 +107,7 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
     {
       headerName: 'Cảnh báo', field: 'warning_level',
       width: 130, editable: isEditable('warning_level'),
+      hide: !isVisible('warning_level'),
       cellRenderer: WarningCellRenderer,
       cellEditor: 'agSelectCellEditor',
       cellEditorParams: {
@@ -113,11 +124,13 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
     {
       headerName: 'Lý do cảnh báo', field: 'warning_reason',
       width: 220, editable: isEditable('warning_reason'),
+      hide: !isVisible('warning_reason'),
       cellStyle: makeCellStyle(),
     },
     {
       headerName: 'Ngày cảnh báo', field: 'warning_date',
       width: 140, editable: isEditable('warning_date'),
+      hide: !isVisible('warning_date'),
       cellEditor: 'agDateStringCellEditor',
       valueFormatter: (p) => formatDate(p.value, 'yyyy-MM-dd'),
       cellStyle: makeCellStyle(),
@@ -125,6 +138,7 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
     {
       headerName: 'Ghi chú cảnh báo', field: 'warning_note',
       width: 220, editable: isEditable('warning_note'),
+      hide: !isVisible('warning_note'),
       cellStyle: makeCellStyle(),
     },
   ]
@@ -138,6 +152,7 @@ export function buildColumnDefs(customColumns, canEdit, editableColumns = null, 
       colId: field,
       width: 160,
       editable: isEditable(field),
+      hide: !isVisible(field),
       __custom_column: true,
       __column_def: cc,
       cellStyle: makeCellStyle(),
@@ -233,6 +248,7 @@ export default function ExcelTable({
   canEdit,
   canView,
   editableColumns = null,
+  visibleColumns = null,
   onChanged,
   onOpenColumnManager,
 }) {
@@ -327,8 +343,8 @@ export default function ExcelTable({
   }, [customColumns])
 
   const columnDefs = useMemo(() => {
-    return buildColumnDefs(customColumns, canEdit, editableColumns, cellStyles)
-  }, [customColumns, canEdit, editableColumns, cellStyles])
+    return buildColumnDefs(customColumns, canEdit, editableColumns, visibleColumns, cellStyles)
+  }, [customColumns, canEdit, editableColumns, visibleColumns, cellStyles])
 
   const defaultColDef = useMemo(() => ({
     resizable: true,

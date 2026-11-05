@@ -37,12 +37,12 @@ export default function Users() {
   })
   const [formErr, setFormErr] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  // Phân quyền ngay trong form tạo/sửa: { [classId]: { can_view, can_edit, editable_columns: [] } }
+  // Phân quyền ngay trong form tạo/sửa: { [classId]: { can_view, can_edit, editable_columns: [], visible_columns: [] } }
   const [formPerms, setFormPerms] = useState({})
 
   const [permOpen, setPermOpen] = useState(null) // user record
   const [permLoading, setPermLoading] = useState(false)
-  const [permData, setPermData] = useState({}) // { [classId]: { can_view, can_edit, editable_columns: [] } }
+  const [permData, setPermData] = useState({}) // { [classId]: { can_view, can_edit, editable_columns: [], visible_columns: [] } }
   const [permSaving, setPermSaving] = useState(false)
 
   const [confirmStatus, setConfirmStatus] = useState(null) // {user, type: 'lock'|'unlock'|'resetpw'|'delete'}
@@ -108,6 +108,7 @@ export default function Users() {
           can_view: !!p?.can_view,
           can_edit: !!p?.can_edit,
           editable_columns: Array.isArray(p?.editable_columns) ? p.editable_columns : [],
+          visible_columns: Array.isArray(p?.visible_columns) ? p.visible_columns : [],
         }
       })
       setFormPerms(map)
@@ -179,6 +180,7 @@ export default function Users() {
             can_view: !!p.can_view,
             can_edit: !!p.can_edit,
             editable_columns: Array.isArray(p.editable_columns) ? p.editable_columns : [],
+            visible_columns: Array.isArray(p.visible_columns) ? p.visible_columns : [],
           }))
           .filter((r) => r.can_view || r.can_edit)
         if (rows.length) {
@@ -202,23 +204,28 @@ export default function Users() {
    */
   const toggleFormPerm = (classId, field) => {
     setFormPerms((prev) => {
-      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [] }
+      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [], visible_columns: [] }
       const next = { ...cur, [field]: !cur[field] }
       if (field === 'can_edit' && next.can_edit) next.can_view = true
-      if (field === 'can_view' && !next.can_view) { next.can_edit = false; next.editable_columns = [] }
+      if (field === 'can_view' && !next.can_view) { 
+        next.can_edit = false; 
+        next.editable_columns = [];
+        next.visible_columns = [];
+      }
       return { ...prev, [classId]: next }
     })
   }
 
   /**
-   * Toggle 1 cột trong editable_columns của form
+   * Toggle 1 cột trong editable_columns hoặc visible_columns của form
    */
-  const toggleFormColumn = (classId, colKey) => {
+  const toggleFormColumn = (classId, colKey, type = 'editable') => {
     setFormPerms((prev) => {
-      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [] }
-      const cols = new Set(cur.editable_columns || [])
+      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [], visible_columns: [] }
+      const field = type === 'editable' ? 'editable_columns' : 'visible_columns'
+      const cols = new Set(cur[field] || [])
       if (cols.has(colKey)) cols.delete(colKey); else cols.add(colKey)
-      return { ...prev, [classId]: { ...cur, editable_columns: [...cols] } }
+      return { ...prev, [classId]: { ...cur, [field]: [...cols] } }
     })
   }
 
@@ -234,6 +241,7 @@ export default function Users() {
           can_view: !!p?.can_view,
           can_edit: !!p?.can_edit,
           editable_columns: Array.isArray(p?.editable_columns) ? p.editable_columns : [],
+          visible_columns: Array.isArray(p?.visible_columns) ? p.visible_columns : [],
         }
       })
       // Luật: can_edit = true thì can_view phải true
@@ -248,25 +256,30 @@ export default function Users() {
 
   const togglePerm = (classId, field) => {
     setPermData((prev) => {
-      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [] }
+      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [], visible_columns: [] }
       const next = { ...cur, [field]: !cur[field] }
       // Nếu can_edit → can_view phải true
       if (field === 'can_edit' && next.can_edit) next.can_view = true
-      // Nếu can_view tắt → tự tắt can_edit và xóa editable_columns
-      if (field === 'can_view' && !next.can_view) { next.can_edit = false; next.editable_columns = [] }
+      // Nếu can_view tắt → tự tắt can_edit và xóa các cột
+      if (field === 'can_view' && !next.can_view) { 
+        next.can_edit = false; 
+        next.editable_columns = [];
+        next.visible_columns = [];
+      }
       return { ...prev, [classId]: next }
     })
   }
 
   /**
-   * Toggle 1 cột trong editable_columns của modal phân quyền
+   * Toggle 1 cột trong editable_columns hoặc visible_columns của modal phân quyền
    */
-  const togglePermColumn = (classId, colKey) => {
+  const togglePermColumn = (classId, colKey, type = 'editable') => {
     setPermData((prev) => {
-      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [] }
-      const cols = new Set(cur.editable_columns || [])
+      const cur = prev[classId] || { can_view: false, can_edit: false, editable_columns: [], visible_columns: [] }
+      const field = type === 'editable' ? 'editable_columns' : 'visible_columns'
+      const cols = new Set(cur[field] || [])
       if (cols.has(colKey)) cols.delete(colKey); else cols.add(colKey)
-      return { ...prev, [classId]: { ...cur, editable_columns: [...cols] } }
+      return { ...prev, [classId]: { ...cur, [field]: [...cols] } }
     })
   }
 
@@ -281,6 +294,7 @@ export default function Users() {
           can_view: !!p.can_view,
           can_edit: !!p.can_edit,
           editable_columns: Array.isArray(p.editable_columns) ? p.editable_columns : [],
+          visible_columns: Array.isArray(p.visible_columns) ? p.visible_columns : [],
         }
       }).filter((r) => r.can_view || r.can_edit)
       await upsertPermissionsBulk(rows)
@@ -481,10 +495,48 @@ export default function Users() {
                         ✏️ Sửa
                       </label>
                     </div>
-                    {p.can_edit && (
-                      <div className="px-3 py-2 bg-white">
+
+                    {p.can_view && (
+                      <div className="px-3 py-2 bg-white border-b border-slate-50">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium text-slate-500">Cột được phép sửa:</span>
+                          <span className="text-[10px] font-bold text-primary-600 uppercase tracking-tight">👁️ Cột được phép xem:</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const all = cols.map((x) => x.key)
+                              const cur = new Set(p.visible_columns || [])
+                              const allChecked = all.every((k) => cur.has(k))
+                              const next = allChecked ? [] : all
+                              setFormPerms((prev) => ({
+                                ...prev,
+                                [c.id]: { ...p, visible_columns: next },
+                              }))
+                            }}
+                            className="text-[10px] text-primary-500 hover:underline"
+                          >
+                            {cols.every((x) => (p.visible_columns || []).includes(x.key)) ? 'Bỏ chọn hết' : 'Chọn hết'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cols.map((col) => (
+                            <label key={col.key} className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer px-1.5 py-0.5 rounded border border-slate-100 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={(p.visible_columns || []).includes(col.key)}
+                                onChange={() => toggleFormColumn(c.id, col.key, 'visible')}
+                                className="w-3 h-3 rounded border-slate-300 text-primary-500 focus:ring-primary-500"
+                              />
+                              {col.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {p.can_edit && (
+                      <div className="px-3 py-2 bg-slate-50/50">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-green-600 uppercase tracking-tight">✏️ Cột được phép sửa:</span>
                           <button
                             type="button"
                             onClick={() => {
@@ -497,19 +549,19 @@ export default function Users() {
                                 [c.id]: { ...p, editable_columns: next },
                               }))
                             }}
-                            className="text-xs text-primary-600 hover:underline"
+                            className="text-[10px] text-green-500 hover:underline"
                           >
-                            {cols.every((x) => (p.editable_columns || []).includes(x.key)) ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                            {cols.every((x) => (p.editable_columns || []).includes(x.key)) ? 'Bỏ chọn hết' : 'Chọn hết'}
                           </button>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           {cols.map((col) => (
-                            <label key={col.key} className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer px-2 py-1 rounded border border-slate-200 hover:bg-slate-50">
+                            <label key={col.key} className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer px-1.5 py-0.5 rounded border border-slate-100 hover:bg-slate-50">
                               <input
                                 type="checkbox"
                                 checked={(p.editable_columns || []).includes(col.key)}
-                                onChange={() => toggleFormColumn(c.id, col.key)}
-                                className="w-3.5 h-3.5 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                onChange={() => toggleFormColumn(c.id, col.key, 'editable')}
+                                className="w-3 h-3 rounded border-slate-300 text-green-600 focus:ring-green-500"
                               />
                               {col.label}
                             </label>
@@ -580,53 +632,89 @@ export default function Users() {
                             className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
                           />
                           👁️ Xem
-                        </label>
-                        <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={p.can_edit}
-                            onChange={() => togglePerm(c.id, 'can_edit')}
-                            disabled={!p.can_view}
-                            className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-500 disabled:opacity-40"
-                          />
-                          ✏️ Sửa
-                        </label>
-                      </div>
-                      {p.can_edit && (
-                        <div className="px-3 py-2.5 bg-white border-t border-slate-100">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-medium text-slate-500">Cột được phép sửa:</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const all = cols.map((x) => x.key)
-                                const allChecked = all.every((k) => (p.editable_columns || []).includes(k))
-                                setPermData((prev) => ({
-                                  ...prev,
-                                  [c.id]: { ...p, editable_columns: allChecked ? [] : all },
-                                }))
-                              }}
-                              className="text-xs text-primary-600 hover:underline"
-                            >
-                              {cols.every((x) => (p.editable_columns || []).includes(x.key)) ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
-                            </button>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {cols.map((col) => (
-                              <label key={col.key} className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer px-2 py-1 rounded border border-slate-200 hover:bg-slate-50">
-                                <input
-                                  type="checkbox"
-                                  checked={(p.editable_columns || []).includes(col.key)}
-                                  onChange={() => togglePermColumn(c.id, col.key)}
-                                  className="w-3.5 h-3.5 rounded border-slate-300 text-green-600 focus:ring-green-500"
-                                />
-                                {col.label}
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={p.can_edit}
+                          onChange={() => togglePerm(c.id, 'can_edit')}
+                          disabled={!p.can_view}
+                          className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-500 disabled:opacity-40"
+                        />
+                        ✏️ Sửa
+                      </label>
                     </div>
+
+                    {p.can_view && (
+                      <div className="px-3 py-2 bg-white border-t border-slate-100">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-primary-600 uppercase tracking-tight">👁️ Cột được phép xem:</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const all = cols.map((x) => x.key)
+                              const allChecked = all.every((k) => (p.visible_columns || []).includes(k))
+                              setPermData((prev) => ({
+                                ...prev,
+                                [c.id]: { ...p, visible_columns: allChecked ? [] : all },
+                              }))
+                            }}
+                            className="text-[10px] text-primary-500 hover:underline"
+                          >
+                            {cols.every((x) => (p.visible_columns || []).includes(x.key)) ? 'Bỏ chọn hết' : 'Chọn hết'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cols.map((col) => (
+                            <label key={col.key} className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer px-1.5 py-0.5 rounded border border-slate-100 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={(p.visible_columns || []).includes(col.key)}
+                                onChange={() => togglePermColumn(c.id, col.key, 'visible')}
+                                className="w-3 h-3 rounded border-slate-300 text-primary-500 focus:ring-primary-500"
+                              />
+                              {col.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {p.can_edit && (
+                      <div className="px-3 py-2 bg-slate-50/50 border-t border-slate-100">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-green-600 uppercase tracking-tight">✏️ Cột được phép sửa:</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const all = cols.map((x) => x.key)
+                              const allChecked = all.every((k) => (p.editable_columns || []).includes(k))
+                              setPermData((prev) => ({
+                                ...prev,
+                                [c.id]: { ...p, editable_columns: allChecked ? [] : all },
+                              }))
+                            }}
+                            className="text-[10px] text-green-500 hover:underline"
+                          >
+                            {cols.every((x) => (p.editable_columns || []).includes(x.key)) ? 'Bỏ chọn hết' : 'Chọn hết'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cols.map((col) => (
+                            <label key={col.key} className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer px-1.5 py-0.5 rounded border border-slate-100 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={(p.editable_columns || []).includes(col.key)}
+                                onChange={() => togglePermColumn(c.id, col.key, 'editable')}
+                                className="w-3 h-3 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                              />
+                              {col.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   )
                 })}
               </div>

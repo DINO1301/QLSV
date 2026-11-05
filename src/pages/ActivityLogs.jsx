@@ -206,12 +206,8 @@ export default function ActivityLogs() {
               />
             )}
             <div>
-              <div className="text-xs uppercase font-semibold text-slate-500 mb-2">Dữ liệu cũ (trước)</div>
-              <JsonView json={detail.old_data} />
-            </div>
-            <div>
-              <div className="text-xs uppercase font-semibold text-slate-500 mb-2">Dữ liệu mới (sau)</div>
-              <JsonView json={detail.new_data} />
+              <div className="text-xs uppercase font-semibold text-slate-500 mb-2">Chi tiết thay đổi</div>
+              <DataSummary action={detail.action} oldData={detail.old_data} newData={detail.new_data} />
             </div>
           </div>
         )}
@@ -229,11 +225,76 @@ function Grid({ label, value }) {
   )
 }
 
-function JsonView({ json }) {
-  if (!json) return <div className="p-3 bg-slate-50 rounded text-slate-400 italic text-xs">(trống)</div>
+function DataSummary({ action, oldData, newData }) {
+  if (!oldData && !newData) return <div className="p-3 bg-slate-50 rounded text-slate-400 italic text-xs">(trống)</div>
+
+  // Xử lý các action cụ thể
+  if (action === 'IMPORT_EXCEL') {
+    return (
+      <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-blue-800 text-xs space-y-1">
+        <div>📥 <b>File:</b> {newData?.file || 'N/A'}</div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <div>➕ Thêm mới: <b>{newData?.inserted || 0}</b></div>
+          <div>📝 Cập nhật: <b>{newData?.updated || 0}</b></div>
+          <div>🏫 Lớp mới: <b>{newData?.new_classes || 0}</b></div>
+          <div>📊 Cột mới: <b>{newData?.new_columns || 0}</b></div>
+        </div>
+      </div>
+    )
+  }
+
+  // So sánh các field thay đổi cho UPDATE actions
+  if (action.startsWith('UPDATE_')) {
+    const changes = []
+    const allKeys = new Set([...Object.keys(oldData || {}), ...Object.keys(newData || {})])
+    
+    // Loại bỏ các key không cần thiết (id, created_at, updated_at)
+    const ignoreKeys = ['id', 'created_at', 'updated_at', 'user_id', 'class_id', 'student_id']
+    
+    allKeys.forEach(key => {
+      if (ignoreKeys.includes(key)) return
+      const oldVal = oldData?.[key]
+      const newVal = newData?.[key]
+      
+      if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+        changes.push({
+          key,
+          old: oldVal,
+          new: newVal
+        })
+      }
+    })
+
+    if (changes.length === 0) return <div className="text-xs text-slate-500">Không có thay đổi dữ liệu đáng kể.</div>
+
+    return (
+      <div className="space-y-2">
+        {changes.map((c, i) => (
+          <div key={i} className="flex items-start gap-2 p-2 bg-slate-50 rounded border border-slate-100 text-xs">
+            <span className="font-semibold text-slate-600 min-w-[80px]">{c.key}:</span>
+            <div className="flex flex-1 items-center gap-2 flex-wrap">
+              <span className="text-red-600 line-through decoration-red-300">{String(c.old ?? '(trống)')}</span>
+              <span className="text-slate-400">→</span>
+              <span className="text-green-700 font-medium">{String(c.new ?? '(trống)')}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  // Cho các action CREATE/DELETE: hiển thị dữ liệu dạng danh sách
+  const data = newData || oldData
   return (
-    <pre className="p-3 bg-slate-900 text-green-300 rounded-lg text-xs overflow-x-auto font-mono">
-      {JSON.stringify(json, null, 2)}
-    </pre>
+    <div className="p-3 bg-slate-50 rounded border border-slate-100">
+      <div className="grid grid-cols-1 gap-1 text-xs">
+        {Object.entries(data).map(([k, v]) => (
+          <div key={k} className="flex gap-2">
+            <span className="text-slate-500 w-24 shrink-0">{k}:</span>
+            <span className="text-slate-800 font-medium break-all">{JSON.stringify(v)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

@@ -150,6 +150,8 @@ export default function Students() {
   const canEdit = isAdmin || permission.can_edit
   // editableColumns: null = admin (sửa được hết); array = danh sách cột được sửa
   const editableColumns = isAdmin ? null : (permission.editable_columns || [])
+  // visibleColumns: null = admin (xem được hết); array = danh sách cột được xem
+  const visibleColumns = isAdmin ? null : (permission.visible_columns || [])
 
   return (
     <div className="space-y-5">
@@ -224,6 +226,7 @@ export default function Students() {
         canEdit={canEdit}
         canView={true}
         editableColumns={editableColumns}
+        visibleColumns={visibleColumns}
         onChanged={(signal) => {
           // Reload students/số liệu sau khi thay đổi
           if (signal === 'create' || signal === 'delete') {

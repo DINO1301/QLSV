@@ -294,7 +294,11 @@ export default function ImportExcel() {
       // Class id tương ứng
       const classObj = classMap[className.toLowerCase()]
       payload.__class_id__ = classObj?.id || null
-      if (!classObj && !autoCreateClass) {
+      
+      // Chỉ lỗi nếu không có lớp VÀ không tự tạo lớp
+      if (!className && !selectedClasses.length && !autoCreateClass) {
+        errors.push('Thiếu thông tin lớp học')
+      } else if (className && !classObj && !autoCreateClass) {
         errors.push(`Lớp "${className}" chưa tồn tại. Hãy bật "Tự tạo lớp mới" hoặc tạo lớp trước.`)
       }
 
@@ -311,11 +315,12 @@ export default function ImportExcel() {
         }
       })
 
-      if (!hasStudentCode || !payload.student_code?.toString().trim()) {
-        errors.push('Thiếu Mã sinh viên')
-      }
-      if (!hasFullName || !payload.full_name?.toString().trim()) {
-        errors.push('Thiếu Họ tên')
+      // Yêu cầu Mã sinh viên HOẶC Họ tên (thay vì bắt buộc cả hai)
+      const studentCodeVal = payload.student_code?.toString().trim()
+      const fullNameVal = payload.full_name?.toString().trim()
+
+      if (!studentCodeVal && !fullNameVal) {
+        errors.push('Thiếu Mã sinh viên hoặc Họ tên')
       }
 
       // warning_level parse
@@ -454,8 +459,15 @@ export default function ImportExcel() {
       const payloadMap = new Map() // key -> payload (loại trùng, dòng sau thắng)
       const rowMeta = new Map()    // key -> { isNew, custom_values, new_custom_values }
       for (const v of valid) {
-        const name = String(v.__class_name__ || '').trim().toLowerCase()
-        const classObj = classIdMap[name]
+        let name = String(v.__class_name__ || '').trim().toLowerCase()
+        let classObj = classIdMap[name]
+
+        // Nếu không có tên lớp, thử dùng lớp đầu tiên trong danh sách đã chọn
+        if (!classObj && !name && selectedClasses.length > 0) {
+          const firstSelectedId = selectedClasses[0]
+          classObj = classes.find(c => c.id === firstSelectedId)
+        }
+
         if (!classObj) continue
         const classId = classObj.id
         const code = String(v.student_code).trim()
