@@ -10,6 +10,7 @@ import Button from '../components/UI/Button'
 import { WARNING_LABELS } from '../utils/constants'
 import { Bar } from 'react-chartjs-2'
 import GlobalStudentTable from '../components/DataTable/GlobalStudentTable'
+import ColumnManager from '../components/DataTable/ColumnManager'
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend,
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const [globalStudents, setGlobalStudents] = useState([])
   const [globalColumns, setGlobalColumns] = useState([])
   const [tableLoading, setTableLoading] = useState(false)
+  const [globalColumnManagerOpen, setGlobalColumnManagerOpen] = useState(false)
 
   const loadAll = async () => {
     setLoading(true)
@@ -312,6 +314,7 @@ export default function Dashboard() {
             columns={globalColumns}
             classes={classList} // Thêm classList để hiển thị bộ lọc lớp đầy đủ
             canEdit={isAdmin} 
+            onOpenColumnManager={() => setGlobalColumnManagerOpen(true)}
             onChanged={(signal) => {
               if (signal === 'delete' || signal === 'update') {
                 // Có thể reload stats nếu cần
@@ -321,6 +324,16 @@ export default function Dashboard() {
           />
         )}
       </Card>
+
+      <ColumnManager
+        open={globalColumnManagerOpen}
+        onClose={() => setGlobalColumnManagerOpen(false)}
+        canEdit={isAdmin}
+        columns={globalColumns}
+        setColumns={setGlobalColumns}
+        scope="global"
+        onChanged={loadTableData}
+      />
     </div>
   )
 }

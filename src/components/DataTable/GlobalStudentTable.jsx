@@ -221,6 +221,7 @@ export default function GlobalStudentTable({
   classes = [], // Nhận danh sách lớp đầy đủ từ Dashboard
   canEdit,
   onChanged,
+  onOpenColumnManager,
 }) {
   const gridRef = useRef(null)
   const { showSuccess, showError } = useToast()
@@ -320,9 +321,16 @@ export default function GlobalStudentTable({
   }, [])
 
   const uniqueColumnNames = useMemo(() => {
-    const names = new Set()
-    allColumns.forEach(c => names.add(c.column_name))
-    return Array.from(names).sort()
+    const byName = new Map()
+    allColumns.forEach((column) => {
+      const current = byName.get(column.column_name)
+      if (!current || column.column_order < current.column_order) {
+        byName.set(column.column_name, column)
+      }
+    })
+    return [...byName.values()]
+      .sort((a, b) => (a.column_order - b.column_order) || a.column_name.localeCompare(b.column_name))
+      .map((column) => column.column_name)
   }, [allColumns])
 
   const columnDefs = useMemo(() => {
@@ -542,6 +550,11 @@ export default function GlobalStudentTable({
 
         <div className="flex-1" />
         <div className="flex flex-wrap gap-2">
+          {canEdit && (
+            <Button variant="secondary" onClick={onOpenColumnManager}>
+              ⚙️ Quản lý cột
+            </Button>
+          )}
           {canEdit && (
             <Button variant="secondary" onClick={openColorMenu}>
               🎨 Bôi màu

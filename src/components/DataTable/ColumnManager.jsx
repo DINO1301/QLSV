@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import Modal, { ConfirmDialog } from '../UI/Modal'
 import Button from '../UI/Button'
 import Input from '../UI/Input'
@@ -6,9 +6,9 @@ import Select from '../UI/Select'
 import { useToast } from '../../contexts/ToastContext'
 import {
   createColumn, updateColumn, deleteColumn, reorderColumns,
+  createGlobalColumn, updateGlobalColumn, deleteGlobalColumn, reorderGlobalColumns,
 } from '../../services/columnService'
 import { DATA_TYPE_LABELS, DATA_TYPES } from '../../utils/constants'
-import { safeJson } from '../../utils/helpers'
 
 /**
  * Modal quản lý cột: xem danh sách, thêm, sửa tên/kiểu, xóa, kéo/đánh lại thứ tự
@@ -20,6 +20,8 @@ export default function ColumnManager({
   canEdit,
   columns,      // custom_columns từ state cha
   setColumns,   // setter
+  scope = 'class',
+  onChanged,
 }) {
   const { showSuccess, showError } = useToast()
   const [formOpen, setFormOpen] = useState(false)
@@ -34,6 +36,19 @@ export default function ColumnManager({
   const [submitting, setSubmitting] = useState(false)
   const [reordering, setReordering] = useState(false)
   const [confirmDel, setConfirmDel] = useState(null)
+  const isGlobal = scope === 'global'
+
+  const managedColumns = useMemo(() => {
+    const sorted = [...(columns || [])].sort(
+      (a, b) => (a.column_order - b.column_order) || a.column_name.localeCompare(b.column_name)
+    )
+    if (!isGlobal) return sorted
+    const unique = new Map()
+    sorted.forEach((column) => {
+      if (!unique.has(column.column_name)) unique.set(column.column_name, column)
+    })
+    return [...unique.values()]
+  }, [columns, isGlobal])
 
   // Reset form khi mở modal tạo mới
   const openCreate = () => {
@@ -42,7 +57,7 @@ export default function ColumnManager({
       column_name: '',
       data_type: DATA_TYPES.TEXT,
       options: '',
-      column_order: (columns?.length || 0),
+      column_order: managedColumns.length,
     })
     setFormErr({})
     setFormOpen(true)
@@ -62,6 +77,13 @@ export default function ColumnManager({
   const submit = async () => {
     const e = {}
     if (!form.column_name.trim()) e.column_name = 'Tên cột không được trống'
+    if (
+      isGlobal &&
+      !editing &&
+      managedColumns.some((column) => column.column_name === form.column_name.trim())
+    ) {
+      e.column_name = 'Tên cột này đã tồn tại trên dashboard'
+    }
     if (form.data_type === DATA_TYPES.SELECT && !form.options.trim()) {
       e.options = 'Cột Select cần ít nhất 1 lựa chọn (mỗi dòng 1 lựa chọn)'
     }
@@ -71,7 +93,7 @@ export default function ColumnManager({
     setSubmitting(true)
     try {
       const payload = {
-        class_id: classId,
+        ...(isGlobal ? {} : { class_id: classId }),
         column_name: form.column_name.trim(),
         data_type: form.data_type,
         column_order: Number(form.column_order) || 0,
@@ -81,18 +103,28 @@ export default function ColumnManager({
             : [],
       }
       let saved
-      if (editing) {
+      if (isGlobal) {
+        saved = editing
+          ? await updateGlobalColumn(editing.id, payload)
+          : await createGlobalColumn(payload)
+      } else if (editing) {
         saved = await updateColumn(editing.id, payload)
       } else {
         saved = await createColumn(payload)
       }
       // Cập nhật state cục bộ
       setColumns((prev) => {
+        if (isGlobal) {
+          const replacedNames = new Set([editing?.column_name, payload.column_name].filter(Boolean))
+          return [...prev.filter((column) => !replacedNames.has(column.column_name)), ...saved]
+            .sort((a, b) => (a.column_order - b.column_order) || a.column_name.localeCompare(b.column_name))
+        }
         const next = editing ? prev.map((x) => x.id === saved.id ? saved : x) : [...prev, saved]
         return next.sort((a, b) => (a.column_order - b.column_order) || a.column_name.localeCompare(b.column_name))
       })
       showSuccess(editing ? 'Đã cập nhật cột' : 'Đã thêm cột mới')
       setFormOpen(false)
+      onChanged?.()
     } catch (err) {
       showError(err.message || (editing ? 'Cập nhật thất bại' : 'Thêm cột thất bại'))
     } finally {
@@ -103,10 +135,14 @@ export default function ColumnManager({
   const onDelete = async () => {
     if (!confirmDel) return
     try {
-      await deleteColumn(confirmDel.id)
-      setColumns((prev) => prev.filter((c) => c.id !== confirmDel.id))
+      if (isGlobal) await deleteGlobalColumn(confirmDel.id)
+      else await deleteColumn(confirmDel.id)
+      setColumns((prev) => prev.filter((column) =>
+        isGlobal ? column.column_name !== confirmDel.column_name : column.id !== confirmDel.id
+      ))
       showSuccess(`Đã xóa cột "${confirmDel.column_name}"`)
       setConfirmDel(null)
+      onChanged?.()
     } catch (err) {
       showError(err.message || 'Xóa cột thất bại')
     }
@@ -114,7 +150,7 @@ export default function ColumnManager({
 
   const moveOrder = async (index, dir) => {
     if (reordering) return
-    const newArr = [...columns]
+    const newArr = [...managedColumns]
     const target = index + dir
     if (target < 0 || target >= newArr.length) return
     
@@ -125,16 +161,20 @@ export default function ColumnManager({
     newArr[target] = temp
 
     // Cập nhật lại column_order cho toàn bộ list để đảm bảo tính liên tục
-    const updates = newArr.map((c, idx) => ({ 
-      id: c.id, 
-      column_order: idx 
-    }))
-
     try {
-      await reorderColumns(updates)
-      // Cập nhật state với data mới (giữ lại các trường khác của column)
-      const updatedColumns = newArr.map((c, idx) => ({ ...c, column_order: idx }))
-      setColumns(updatedColumns)
+      if (isGlobal) {
+        await reorderGlobalColumns(newArr.map((column) => column.id))
+        const orderByName = new Map(newArr.map((column, idx) => [column.column_name, idx]))
+        setColumns((prev) => prev.map((column) => ({
+          ...column,
+          column_order: orderByName.get(column.column_name) ?? column.column_order,
+        })))
+      } else {
+        const updates = newArr.map((c, idx) => ({ id: c.id, column_order: idx }))
+        await reorderColumns(updates)
+        setColumns(newArr.map((c, idx) => ({ ...c, column_order: idx })))
+      }
+      onChanged?.()
     } catch (e) {
       showError(e.message || 'Thay đổi thứ tự thất bại')
     } finally {
@@ -154,8 +194,9 @@ export default function ColumnManager({
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-slate-600">
-              Các cột cố định (Mã SV, Họ tên, Ngày sinh, Cảnh báo...) không thể xóa.
-              Bạn có thể thêm cột tùy chỉnh theo nhu cầu của lớp.
+              {isGlobal
+                ? 'Thay đổi tại đây sẽ đồng bộ cột cùng tên trên tất cả các lớp hiện có.'
+                : 'Các cột cố định (Mã SV, Họ tên, Ngày sinh, Cảnh báo...) không thể xóa. Bạn có thể thêm cột tùy chỉnh theo nhu cầu của lớp.'}
             </p>
             {canEdit && (
               <Button variant="primary" size="sm" onClick={openCreate}>
@@ -175,14 +216,14 @@ export default function ColumnManager({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {columns.length === 0 && (
+                {managedColumns.length === 0 && (
                   <tr>
                     <td colSpan={canEdit ? 4 : 3} className="px-4 py-8 text-center text-slate-400">
                       Chưa có cột tùy chỉnh. Nhấn "Thêm cột" để bắt đầu.
                     </td>
                   </tr>
                 )}
-                {columns.map((c, idx) => (
+                {managedColumns.map((c, idx) => (
                   <tr key={c.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-medium text-slate-800">{c.column_name}</td>
                     <td className="px-4 py-3 text-slate-600">
@@ -210,7 +251,7 @@ export default function ColumnManager({
                             </button>
                             <button
                               onClick={() => moveOrder(idx, +1)}
-                              disabled={idx === columns.length - 1 || reordering}
+                              disabled={idx === managedColumns.length - 1 || reordering}
                               className="p-0.5 rounded text-[10px] border border-slate-200 disabled:opacity-30 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-200 transition-colors"
                               title="Di chuyển xuống"
                             >
@@ -295,7 +336,7 @@ export default function ColumnManager({
         title="Xóa cột"
         message={
           confirmDel
-            ? `Bạn có chắc muốn xóa cột "${confirmDel.column_name}"?\n\nTất cả dữ liệu của cột này trên ${'TẤT CẢ'} sinh viên sẽ bị xóa vĩnh viễn.\n\nKhông thể hoàn tác.`
+            ? `Bạn có chắc muốn xóa cột "${confirmDel.column_name}"${isGlobal ? ' ở tất cả các lớp' : ''}?\n\nTất cả dữ liệu của cột này trên các sinh viên thuộc phạm vi bị ảnh hưởng sẽ bị xóa vĩnh viễn.\n\nKhông thể hoàn tác.`
             : ''
         }
         confirmText="Xóa cột này"

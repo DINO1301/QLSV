@@ -70,6 +70,48 @@ export const reorderColumns = async (updates) => {
   return true
 }
 
+/** Thêm một cột chung cho tất cả các lớp hiện có (chỉ admin, được bảo vệ ở RPC). */
+export const createGlobalColumn = async ({ column_name, data_type, options, column_order }) => {
+  const { data, error } = await supabase.rpc('create_global_custom_column', {
+    p_column_name: column_name,
+    p_data_type: data_type,
+    p_options: options || [],
+    p_column_order: column_order || 0,
+  })
+  if (error) throw error
+  return data || []
+}
+
+/** Sửa định nghĩa của các cột cùng tên trên mọi lớp, giữ nguyên các giá trị đã nhập. */
+export const updateGlobalColumn = async (id, { column_name, data_type, options, column_order }) => {
+  const { data, error } = await supabase.rpc('update_global_custom_column', {
+    p_column_id: id,
+    p_column_name: column_name,
+    p_data_type: data_type,
+    p_options: options || [],
+    p_column_order: column_order || 0,
+  })
+  if (error) throw error
+  return data || []
+}
+
+/** Xóa các cột cùng tên trên mọi lớp và các giá trị đi kèm. */
+export const deleteGlobalColumn = async (id) => {
+  const { error } = await supabase.rpc('delete_global_custom_column', { p_column_id: id })
+  if (error) throw error
+  return true
+}
+
+/** Đồng bộ thứ tự các cột trên mọi lớp. */
+export const reorderGlobalColumns = async (columnIds) => {
+  if (!columnIds?.length) return true
+  const { error } = await supabase.rpc('reorder_global_custom_columns', {
+    p_column_ids: columnIds,
+  })
+  if (error) throw error
+  return true
+}
+
 /* -------------- custom_values -------------- */
 
 /** Upsert 1 giá trị cột tùy chỉnh */

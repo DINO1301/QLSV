@@ -21,6 +21,9 @@ CREATE INDEX IF NOT EXISTS idx_cell_styles_column ON public.cell_styles(column_k
 ALTER TABLE public.class_permissions
     ADD COLUMN IF NOT EXISTS editable_columns JSONB NOT NULL DEFAULT '[]'::jsonb;
 
+ALTER TABLE public.class_permissions
+    ADD COLUMN IF NOT EXISTS visible_columns JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 -- =============== RLS: cell_styles ===============
 ALTER TABLE public.cell_styles ENABLE ROW LEVEL SECURITY;
 
