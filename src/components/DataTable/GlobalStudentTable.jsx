@@ -235,6 +235,7 @@ export default function GlobalStudentTable({
   const [cellStyles, setCellStyles] = useState({})
   const [ctxMenu, setCtxMenu] = useState(null)
   const [colorMenu, setColorMenu] = useState(null)
+  const [colorScope, setColorScope] = useState('auto') // 'auto' | 'cell' | 'row' | 'column'
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -411,50 +412,78 @@ export default function GlobalStudentTable({
     })
   }, [canEdit, allColumns])
 
+  // Lấy key lưu trong cell_styles cho 1 cột của 1 sinh viên
+  const resolveColumnKey = useCallback((colId, studentClassId) => {
+    if (!colId || colId === '__checkbox__' || colId === '__index__') return null
+    if (colId.startsWith('gcustom:')) {
+      const colName = colId.replace('gcustom:', '')
+      const actualCol = allColumns.find((c) => c.class_id === studentClassId && c.column_name === colName)
+      return actualCol ? `custom:${actualCol.id}` : null
+    }
+    return colId
+  }, [allColumns])
+
   const applyColor = useCallback(async (color) => {
     const api = gridRef.current?.api
+    const selectedNodes = api?.getSelectedNodes() || []
+    const focusedCell = api?.getFocusedCell()
     let targets = []
 
-    const selectedNodes = api.getSelectedNodes()
-    const focusedCell = api.getFocusedCell()
+    const scope = colorScope
 
-    if (selectedNodes.length > 0) {
-      // Nếu có chọn hàng qua checkbox -> Bôi màu TOÀN BỘ DÒNG cho các hàng đó
-      selectedNodes.forEach(node => {
-        const sid = node.data.id
-        const studentClassId = node.data.class_id
+    // Chế độ cột: bôi toàn bộ cột đang focus
+    if (scope === 'column') {
+      if (!focusedCell) {
+        showError('Vui lòng click vào 1 ô thuộc cột cần bôi màu')
+        setColorMenu(null)
+        return
+      }
+      const colId = focusedCell.column.getColId()
+      if (colId === '__checkbox__' || colId === '__index__') {
+        showError('Không thể bôi màu cột này')
+        setColorMenu(null)
+        return
+      }
+      filteredRowData.forEach((s) => {
+        const key = resolveColumnKey(colId, s.class_id)
+        if (key) targets.push({ studentId: s.id, columnKey: key })
+      })
+    }
+    // Chế độ hàng: bôi toàn bộ các hàng đang chọn (hoặc hàng đang focus)
+    else if (scope === 'row' || (scope === 'auto' && selectedNodes.length > 0)) {
+      const rows = selectedNodes.length > 0
+        ? selectedNodes.map((n) => n.data)
+        : focusedCell
+          ? [api.getDisplayedRowAtIndex(focusedCell.rowIndex)?.data].filter(Boolean)
+          : []
 
-        // 1. Các cột hệ thống
+      rows.forEach((s) => {
+        const sid = s.id
         const sysFields = [
           'student_code', 'full_name', 'class_name', 'date_of_birth',
           'warning_level', 'warning_reason', 'warning_date', 'warning_note'
         ]
-        sysFields.forEach(field => {
-          targets.push({ studentId: sid, columnKey: field })
-        })
-
-        // 2. Các cột tùy chỉnh của sinh viên đó
-        allColumns.forEach(col => {
-          if (col.class_id === studentClassId) {
+        sysFields.forEach((field) => targets.push({ studentId: sid, columnKey: field }))
+        allColumns.forEach((col) => {
+          if (col.class_id === s.class_id) {
             targets.push({ studentId: sid, columnKey: `custom:${col.id}` })
           }
         })
       })
-    } else if (focusedCell) {
-      // Nếu không chọn hàng nào qua checkbox -> Chỉ bôi màu Ô đang focus
+    }
+    // Chế độ ô: chỉ bôi ô đang focus
+    else if (scope === 'cell' || (scope === 'auto' && focusedCell)) {
+      if (!focusedCell) {
+        showError('Vui lòng click vào ô cần bôi màu')
+        setColorMenu(null)
+        return
+      }
       const colId = focusedCell.column.getColId()
       const node = api.getDisplayedRowAtIndex(focusedCell.rowIndex)
       const sid = node?.data?.id
-      if (sid && colId !== '__checkbox__' && colId !== '__index__') {
-        const studentClassId = node.data.class_id
-        let key = colId
-        if (colId.startsWith('gcustom:')) {
-          const colName = colId.replace('gcustom:', '')
-          const actualCol = allColumns.find(c => c.class_id === studentClassId && c.column_name === colName)
-          if (actualCol) key = `custom:${actualCol.id}`
-          else return
-        }
-        targets = [{ studentId: sid, columnKey: key }]
+      if (sid) {
+        const key = resolveColumnKey(colId, node.data.class_id)
+        if (key) targets = [{ studentId: sid, columnKey: key }]
       }
     }
 
@@ -482,7 +511,7 @@ export default function GlobalStudentTable({
     } catch (err) {
       showError(err.message || 'Lưu màu thất bại')
     }
-  }, [allColumns, showSuccess, showError])
+  }, [allColumns, filteredRowData, colorScope, resolveColumnKey, showSuccess, showError])
 
   const openColorMenu = (e) => {
     e.stopPropagation() // Ngăn sự kiện bubble lên window làm đóng menu ngay lập tức
@@ -610,8 +639,8 @@ export default function GlobalStudentTable({
             </Button>
           )}
           {canEdit && (
-            <Button variant="secondary" onClick={openColorMenu}>
-              🎨 Bôi màu
+            <Button variant="secondary" onClick={openColorMenu} title="Chọn phạm vi (ô/hàng/cột) rồi chọn màu">
+              🎨 Bôi màu {colorScope !== 'auto' ? `(${colorScope === 'cell' ? 'Ô' : colorScope === 'row' ? 'Hàng' : 'Cột'})` : ''}
             </Button>
           )}
           {canEdit && selectedIds.length > 0 && (
@@ -688,6 +717,30 @@ export default function GlobalStudentTable({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="text-xs text-slate-500 px-2 py-1 font-medium">🎨 Chọn màu bôi</div>
+
+          {/* Chọn phạm vi bôi màu */}
+          <div className="grid grid-cols-4 gap-1 p-1 mb-1">
+            {[
+              { key: 'auto', label: 'Tự động' },
+              { key: 'cell', label: 'Ô' },
+              { key: 'row', label: 'Hàng' },
+              { key: 'column', label: 'Cột' },
+            ].map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setColorScope(opt.key)}
+                className={`text-xs px-1 py-1 rounded border transition-colors ${
+                  colorScope === opt.key
+                    ? 'bg-primary-600 text-white border-primary-600'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-primary-50'
+                }`}
+                title={opt.key === 'auto' ? 'Có chọn hàng → bôi hàng; không → bôi ô' : `Bôi màu theo ${opt.label.toLowerCase()}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-4 gap-1 p-1">
             {CELL_COLOR_OPTIONS.map((c) => (
               <button
