@@ -14,7 +14,7 @@ import {
   updateStudent, createStudent, deleteStudent, deleteStudentsBulk,
 } from '../../services/studentService'
 import { upsertCustomValue, upsertCustomValuesBulk } from '../../services/columnService'
-import { getCellStylesByClass, upsertCellStyle } from '../../services/cellStyleService'
+import { getCellStylesByClass, bulkSetCellStyles } from '../../services/cellStyleService'
 import { insertLog } from '../../services/logService'
 import Modal, { ConfirmDialog } from '../UI/Modal'
 
@@ -462,9 +462,7 @@ export default function ExcelTable({
         })
         return next
       })
-      await Promise.all(targets.map(({ studentId: sid, columnKey: key }) =>
-        upsertCellStyle(sid, key, color || null)
-      ))
+      await bulkSetCellStyles(targets, color || null)
       showSuccess(color ? 'Đã áp dụng màu' : 'Đã xóa màu')
     } catch (err) {
       showError(err.message || 'Lưu màu thất bại')

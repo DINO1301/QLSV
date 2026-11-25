@@ -53,33 +53,6 @@ export const getCellStylesByStudent = async (studentId) => {
 }
 
 /**
- * Upsert màu cho 1 ô (studentId + columnKey)
- * Nếu color là null/undefined/xâu rỗng -> xóa
- */
-export const upsertCellStyle = async (studentId, columnKey, color) => {
-  if (!studentId || !columnKey) return null
-  if (!color) {
-    const { error } = await supabase
-      .from('cell_styles')
-      .delete()
-      .eq('student_id', studentId)
-      .eq('column_key', columnKey)
-    if (error) throw error
-    return null
-  }
-  const { data, error } = await supabase
-    .from('cell_styles')
-    .upsert(
-      { student_id: studentId, column_key: columnKey, color },
-      { onConflict: 'student_id, column_key' }
-    )
-    .select()
-    .single()
-  if (error) throw error
-  return data
-}
-
-/**
  * Xóa nhiều màu ô theo studentId (dùng khi xóa sinh viên)
  */
 export const deleteCellStylesByStudent = async (studentId) => {
@@ -88,5 +61,53 @@ export const deleteCellStylesByStudent = async (studentId) => {
     .delete()
     .eq('student_id', studentId)
   if (error) throw error
+  return true
+}
+
+/**
+ * Áp dụng/xóa màu cho NHIỀU ô cùng lúc bằng cách gộp thành ít request (chia lô).
+ * targets: [{ studentId, columnKey }]
+ * Tránh bắn hàng nghìn request song song gây lỗi net::ERR_INSUFFICIENT_RESOURCES.
+ */
+export const bulkSetCellStyles = async (targets, color) => {
+  const list = (targets || []).filter((t) => t?.studentId && t?.columnKey)
+  if (list.length === 0) return true
+
+  const CHUNK = 500
+
+  if (color) {
+    // Ghi màu: upsert theo lô, onConflict (student_id, column_key)
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const chunk = list.slice(i, i + CHUNK).map((t) => ({
+        student_id: t.studentId,
+        column_key: t.columnKey,
+        color,
+      }))
+      const { error } = await supabase
+        .from('cell_styles')
+        .upsert(chunk, { onConflict: 'student_id, column_key' })
+      if (error) throw error
+    }
+    return true
+  }
+
+  // Xóa màu: nhóm theo column_key rồi xóa theo lô student_id
+  const byColumn = {}
+  list.forEach((t) => {
+    if (!byColumn[t.columnKey]) byColumn[t.columnKey] = new Set()
+    byColumn[t.columnKey].add(t.studentId)
+  })
+
+  for (const [columnKey, idSet] of Object.entries(byColumn)) {
+    const ids = Array.from(idSet)
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { error } = await supabase
+        .from('cell_styles')
+        .delete()
+        .eq('column_key', columnKey)
+        .in('student_id', ids.slice(i, i + CHUNK))
+      if (error) throw error
+    }
+  }
   return true
 }

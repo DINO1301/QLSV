@@ -14,7 +14,7 @@ import {
   updateStudent, deleteStudent, deleteStudentsBulk,
 } from '../../services/studentService'
 import { upsertCustomValue } from '../../services/columnService'
-import { upsertCellStyle, getCellStylesAll } from '../../services/cellStyleService'
+import { getCellStylesAll, bulkSetCellStyles } from '../../services/cellStyleService'
 import { insertLog } from '../../services/logService'
 import { exportToExcel } from '../../services/excelService'
 import { ConfirmDialog } from '../UI/Modal'
@@ -504,9 +504,7 @@ export default function GlobalStudentTable({
         })
         return next
       })
-      await Promise.all(targets.map(({ studentId: sid, columnKey: key }) =>
-        upsertCellStyle(sid, key, color || null)
-      ))
+      await bulkSetCellStyles(targets, color || null)
       showSuccess(color ? 'Đã áp dụng màu' : 'Đã xóa màu')
     } catch (err) {
       showError(err.message || 'Lưu màu thất bại')
