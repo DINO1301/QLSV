@@ -16,6 +16,7 @@ import {
 import { upsertCustomValue } from '../../services/columnService'
 import { upsertCellStyle, getCellStylesAll } from '../../services/cellStyleService'
 import { insertLog } from '../../services/logService'
+import { exportToExcel } from '../../services/excelService'
 import { ConfirmDialog } from '../UI/Modal'
 
 export function buildGlobalColumnDefs(uniqueColumnNames, allColumns, canEdit, cellStyles = {}) {
@@ -530,6 +531,52 @@ export default function GlobalStudentTable({
     }
   }, [quickFilter])
 
+  const exportRows = useCallback(() => {
+    const api = gridRef.current?.api
+    const hasSelection = selectedIds.length > 0
+    const source = hasSelection ? (api?.getSelectedRows() || []) : filteredRowData
+
+    if (!source.length) {
+      showError('Không có dữ liệu để xuất')
+      return
+    }
+
+    // Lấy các cột đang hiển thị (bỏ cột checkbox, STT và cột tên trống gây ra __EMPTY__)
+    const cols = columnDefs.filter(
+      (c) => c.field !== '__checkbox__' && c.field !== '__index__' && (c.headerName || '').trim()
+    )
+
+    const rows = source.map((s) => {
+      const row = {}
+      cols.forEach((col) => {
+        const field = col.field
+        let val
+        if (field.startsWith('gcustom:')) {
+          const colName = field.replace('gcustom:', '')
+          const actualCol = allColumns.find((c) => c.class_id === s.class_id && c.column_name === colName)
+          val = actualCol ? s[`custom:${actualCol.id}`] : null
+        } else {
+          val = s[field]
+        }
+
+        if (field === 'warning_level') {
+          val = val === null || val === undefined || val === '' ? '' : (WARNING_LABELS[val]?.text || val)
+        }
+        if (field === 'date_of_birth' || field === 'warning_date') {
+          val = formatDate(val)
+        }
+
+        row[col.headerName] = val ?? ''
+      })
+      return row
+    })
+
+    const suffix = hasSelection ? `DaChon_${rows.length}` : 'TatCa'
+    const filename = `DanhSachSinhVien_${suffix}_${formatDate(new Date(), 'ddMMyyyy')}.xlsx`
+    exportToExcel(rows, 'Sinh viên', filename)
+    showSuccess(`Đã xuất ${rows.length} sinh viên ra Excel`)
+  }, [selectedIds, filteredRowData, columnDefs, allColumns, showSuccess, showError])
+
   return (
     <div className="space-y-4">
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-wrap items-center gap-3">
@@ -550,6 +597,13 @@ export default function GlobalStudentTable({
 
         <div className="flex-1" />
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="success"
+            onClick={exportRows}
+            title={selectedIds.length > 0 ? `Tải ${selectedIds.length} sinh viên đã chọn` : 'Tải tất cả sinh viên hiện tại'}
+          >
+            📥 Tải Excel {selectedIds.length > 0 ? `(${selectedIds.length})` : '(Tất cả)'}
+          </Button>
           {canEdit && (
             <Button variant="secondary" onClick={onOpenColumnManager}>
               ⚙️ Quản lý cột
